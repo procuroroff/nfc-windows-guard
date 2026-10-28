@@ -1,5 +1,5 @@
 """Lock Screen Window for NFC Windows Guard.
-Displays fullscreen, topmost blocking overlay requiring authorized NFC card.
+Displays fullscreen, topmost blocking overlay across ALL monitors requiring authorized NFC card.
 Handles attempt tracking, buzzer feedback, and fallback to Windows authentication.
 """
 
@@ -8,28 +8,111 @@ import threading
 import tkinter as tk
 from tkinter import simpledialog
 import customtkinter as ctk
-from typing import Optional, Callable
+from typing import Optional, Callable, List
 
 from .config import ConfigManager, normalize_uid
 from .reader import ACR122UReader
 from .hooks import KeyboardBlocker, set_task_manager_disabled, lock_workstation_now
-from .utils import shutdown_pc, restart_pc
+from .utils import shutdown_pc, restart_pc, get_all_monitors, is_light_color
+
+
+class SecondaryLockOverlay(tk.Toplevel):
+    """Fullscreen blocking shield for secondary displays (Monitor 2, 3, etc.)."""
+
+    def __init__(self, master, monitor_info: dict, theme: dict, title_text: str):
+        super().__init__(master)
+        self.master_ref = master
+        self.theme = theme
+
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+
+        w, h = monitor_info["width"], monitor_info["height"]
+        x, y = monitor_info["left"], monitor_info["top"]
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self.configure(bg=theme["bg_color"])
+
+        # Center frame
+        center_frame = tk.Frame(
+            self,
+            bg=theme["card_bg"],
+            highlightbackground=theme["border_color"],
+            highlightthickness=2,
+            padx=40,
+            pady=40
+        )
+        center_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+        icon_lbl = tk.Label(
+            center_frame,
+            text="🔒",
+            font=("Segoe UI", 48),
+            bg=theme["card_bg"],
+            fg=theme["accent_color"]
+        )
+        icon_lbl.pack(pady=(10, 15))
+
+        title_lbl = tk.Label(
+            center_frame,
+            text=title_text,
+            font=("Segoe UI", 20, "bold"),
+            bg=theme["card_bg"],
+            fg=theme["text_primary"]
+        )
+        title_lbl.pack(pady=(0, 5))
+
+        status_lbl = tk.Label(
+            center_frame,
+            text="ДОСТУП ЗАБЛОКИРОВАН",
+            font=("Segoe UI", 12, "bold"),
+            bg=theme["card_bg"],
+            fg=theme["accent_color"]
+        )
+        status_lbl.pack(pady=(0, 15))
+
+        sub_lbl = tk.Label(
+            center_frame,
+            text="Приложите ключ-карту к считывателю ACR122U на основном экране",
+            font=("Segoe UI", 12),
+            bg=theme["card_bg"],
+            fg=theme["text_secondary"]
+        )
+        sub_lbl.pack(pady=(0, 10))
+
+        # Forward focus to main lock window on any interaction
+        self.bind("<Button-1>", self._redirect_focus)
+        self.bind("<Key>", self._redirect_focus)
+
+    def _redirect_focus(self, event=None):
+        if self.master_ref and self.master_ref.winfo_exists():
+            self.master_ref.focus_force()
+            self.master_ref.lift()
 
 
 class NFCLockScreen(ctk.CTk):
-    """Fullscreen Secure Lock Screen Overlay."""
+    """Fullscreen Secure Lock Screen Overlay on Primary Monitor."""
 
     def __init__(self, config_manager: Optional[ConfigManager] = None, on_unlock: Optional[Callable[[], None]] = None):
         super().__init__()
 
         self.cfg = config_manager or ConfigManager()
+        self.cfg.load()
         self.on_unlock_callback = on_unlock
         self.theme = self.cfg.get_current_theme()
+
+        # Appearance mode based on theme luminance
+        if is_light_color(self.theme["bg_color"]):
+            ctk.set_appearance_mode("light")
+        else:
+            ctk.set_appearance_mode("dark")
 
         # Security state
         self.max_attempts = self.cfg.config.get("security", {}).get("max_attempts", 3)
         self.attempts_left = self.max_attempts
         self.is_unlocked = False
+
+        # Secondary monitor windows list
+        self.secondary_overlays: List[SecondaryLockOverlay] = []
 
         # System blocking
         self.kbd_blocker = KeyboardBlocker()
@@ -43,8 +126,8 @@ class NFCLockScreen(ctk.CTk):
             on_status_change=self._on_reader_status_threadsafe,
         )
 
-        # Setup GUI
-        self._setup_window()
+        # Setup Windows & Multi-Monitor
+        self._setup_multi_monitor_windows()
         self._build_ui()
 
         # Start Reader loop
@@ -53,23 +136,39 @@ class NFCLockScreen(ctk.CTk):
         # Fail-safe keyboard binding: Escape opens Emergency PIN prompt
         self.bind("<Escape>", lambda e: self.prompt_master_pin())
 
-    def _setup_window(self):
-        """Configures fullscreen, topmost, borderless window."""
+    def _setup_multi_monitor_windows(self):
+        """Identifies primary and secondary monitors and spawns coverage on ALL displays."""
         self.overrideredirect(True)
         self.attributes("-topmost", True)
 
-        screen_w = self.winfo_screenwidth()
-        screen_h = self.winfo_screenheight()
-        self.geometry(f"{screen_w}x{screen_h}+0+0")
+        all_monitors = get_all_monitors()
+        primary_mon = next((m for m in all_monitors if m.get("primary")), all_monitors[0])
+
+        # Position main interactive window on Primary monitor
+        pw, ph = primary_mon["width"], primary_mon["height"]
+        px, py = primary_mon["left"], primary_mon["top"]
+        self.geometry(f"{pw}x{ph}+{px}+{py}")
         self.configure(fg_color=self.theme["bg_color"])
 
-        # Force grab focus so no clicks pass through
+        # Title for screens
+        title_text = self.cfg.config.get("appearance", {}).get("title_text", "NFC WINDOWS GUARD")
+
+        # Spawn blocking overlay on every secondary monitor
+        for mon in all_monitors:
+            if mon == primary_mon:
+                continue
+            try:
+                overlay = SecondaryLockOverlay(self, mon, self.theme, title_text)
+                self.secondary_overlays.append(overlay)
+            except Exception as e:
+                print(f"[MultiMonitor] Error creating overlay for monitor {mon}: {e}")
+
+        # Force grab focus
         self.focus_force()
         self.grab_set()
 
     def _build_ui(self):
-        """Constructs the modern lock screen interface."""
-        # Main background container
+        """Constructs the modern lock screen interface with active theme colors."""
         self.main_container = ctk.CTkFrame(
             self,
             fg_color=self.theme["bg_color"],
@@ -92,7 +191,7 @@ class NFCLockScreen(ctk.CTk):
 
         # Emergency fallback button in top right
         if self.cfg.config.get("security", {}).get("allow_manual_fallback", True):
-            fallback_btn = ctk.CTkButton(
+            self.fallback_btn = ctk.CTkButton(
                 top_bar,
                 text="Штатный вход Windows (Пароль) ➔",
                 font=ctk.CTkFont(family="Segoe UI", size=13),
@@ -104,7 +203,7 @@ class NFCLockScreen(ctk.CTk):
                 command=self.fallback_to_windows_login,
                 height=32,
             )
-            fallback_btn.pack(side="right")
+            self.fallback_btn.pack(side="right")
 
         # --- Center Shield Panel ---
         center_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
@@ -203,7 +302,7 @@ class NFCLockScreen(ctk.CTk):
         self.dots_lbl.pack(pady=(2, 0))
 
         # Bottom Footer in Card
-        footer_btn = ctk.CTkButton(
+        self.footer_btn = ctk.CTkButton(
             self.card_panel,
             text="Ввести мастер-PIN",
             font=ctk.CTkFont(family="Segoe UI", size=12),
@@ -214,7 +313,7 @@ class NFCLockScreen(ctk.CTk):
             height=26,
             width=140
         )
-        footer_btn.pack(side="bottom", pady=15)
+        self.footer_btn.pack(side="bottom", pady=15)
 
     # --- Thread-Safe Callbacks from Reader ---
 
@@ -329,7 +428,6 @@ class NFCLockScreen(ctk.CTk):
             text_color=self.theme["error_color"]
         )
 
-        # Execute configured fail action after brief notice
         action = self.cfg.config.get("security", {}).get("action_on_fail", "lock_workstation")
         self.after(1000, lambda: self._execute_fail_action(action))
 
@@ -374,14 +472,22 @@ class NFCLockScreen(ctk.CTk):
                 )
 
     def unlock_and_close(self):
-        """Safely tears down hooks, stops reader, and closes overlay."""
+        """Safely tears down hooks, stops reader, destroys secondary overlays, and closes."""
         self._cleanup()
         self.destroy()
         if self.on_unlock_callback:
             self.on_unlock_callback()
 
     def _cleanup(self):
-        """Releases system hooks and reader."""
+        """Releases secondary overlays, system hooks, and reader."""
+        # Destroy all secondary monitor screens
+        for overlay in self.secondary_overlays:
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
+        self.secondary_overlays.clear()
+
         try:
             self.reader.stop_listening()
         except Exception:

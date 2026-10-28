@@ -1,11 +1,10 @@
-"""Settings & Control Panel for NFC Windows Guard.
-Manage authorized cards, themes, security policies, hardware buzzer, multi-monitor, and background daemon.
+"""Apple macOS-inspired System Settings Control Panel for NFC Windows Guard.
+Clean sidebar navigation, grouped cards, SF Pro typography, and live lock screen preview.
 """
 
-import sys
 import os
-import threading
 import subprocess
+import threading
 import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
@@ -13,490 +12,603 @@ from typing import Optional
 
 from .config import ConfigManager, THEME_PRESETS, normalize_uid
 from .reader import ACR122UReader
-from .utils import is_autostart_enabled, set_autostart, is_daemon_running, get_pythonw_executable
+from .utils import (
+    is_autostart_enabled,
+    set_autostart,
+    is_daemon_running,
+    get_pythonw_executable,
+    is_light_color,
+)
+from .fonts import (
+    init_apple_fonts,
+    get_apple_font_family,
+    font_large_title,
+    font_title,
+    font_headline,
+    font_body,
+    font_caption,
+    font_mono,
+)
+from .icons import create_nfc_glyph, create_status_dot
 
 
 class SettingsWindow(ctk.CTk):
-    """Configuration & Card Management GUI."""
+    """macOS-inspired Control Panel with sidebar navigation and grouped surfaces."""
 
     def __init__(self, config_manager: Optional[ConfigManager] = None):
         super().__init__()
 
+        init_apple_fonts()
         self.cfg = config_manager or ConfigManager()
         self.cfg.load()
         self.reader = ACR122UReader()
 
-        self.title("NFC Windows Guard — Центр Управления")
-        self.geometry("960x700")
-        self.minsize(850, 620)
+        self.title("NFC Guard — Настройки")
+        self.geometry("980x640")
+        self.minsize(900, 600)
 
         self.current_theme = self.cfg.get_current_theme()
         ctk.set_appearance_mode("dark")
-        self.configure(fg_color="#12131a")
+        self.configure(fg_color="#0d0d0f")
 
-        self._build_ui()
-        self._load_cards_list()
-        self._refresh_logs()
+        self.active_nav = "cards"
+        self._build_layout()
+        self.show_view("cards")
         self._update_daemon_status_lbl()
 
-    def _build_ui(self):
-        # Top Header
-        self.top_header = ctk.CTkFrame(self, fg_color="#181a24", height=70, corner_radius=0)
-        self.top_header.pack(fill="x")
-        self.top_header.pack_propagate(False)
+    def _build_layout(self):
+        # Main split: Left Sidebar + Right Content Area
+        self.sidebar = ctk.CTkFrame(self, width=230, fg_color="#141417", corner_radius=0)
+        self.sidebar.pack(side="left", fill="y")
+        self.sidebar.pack_propagate(False)
 
-        self.brand_lbl = ctk.CTkLabel(
-            self.top_header,
-            text="🛡️ NFC Windows Guard",
-            font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"),
-            text_color=self.current_theme.get("accent_color", "#00f0ff")
+        self.content_area = ctk.CTkFrame(self, fg_color="#0d0d0f", corner_radius=0)
+        self.content_area.pack(side="right", fill="both", expand=True)
+
+        # --- Sidebar Header ---
+        sb_brand = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        sb_brand.pack(fill="x", padx=18, pady=(24, 20))
+
+        title_row = ctk.CTkFrame(sb_brand, fg_color="transparent")
+        title_row.pack(fill="x")
+
+        app_title = ctk.CTkLabel(
+            title_row,
+            text="NFC Guard",
+            font=font_large_title(18),
+            text_color="#f5f5f7"
         )
-        self.brand_lbl.pack(side="left", padx=25)
+        app_title.pack(side="left")
 
-        self.sub_brand_lbl = ctk.CTkLabel(
-            self.top_header,
-            text="ACR122U Smart Card Security System",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            text_color="#7f8ea3"
+        ver_pill = ctk.CTkFrame(title_row, fg_color="#27272a", corner_radius=8, height=20)
+        ver_pill.pack(side="right")
+        ctk.CTkLabel(
+            ver_pill,
+            text="v2.0",
+            font=font_caption(10),
+            text_color="#86868b"
+        ).pack(padx=6, pady=1)
+
+        sb_sub = ctk.CTkLabel(
+            sb_brand,
+            text="ACS ACR122U Security",
+            font=font_caption(11),
+            text_color="#86868b"
         )
-        self.sub_brand_lbl.pack(side="left", padx=(0, 20))
+        sb_sub.pack(anchor="w", pady=(2, 0))
 
-        self.test_lock_btn = ctk.CTkButton(
-            self.top_header,
-            text="🔒 Тест экрана блокировки",
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color=self.current_theme.get("accent_color", "#3b82f6"),
-            text_color="#000000" if self.current_theme.get("accent_color", "#3b82f6") in ["#00f0ff", "#00ff41"] else "#ffffff",
-            hover_color=self.current_theme.get("accent_hover", "#2563eb"),
-            command=self.launch_lock_test,
+        # --- Sidebar Navigation Items ---
+        self.nav_buttons = {}
+        items = [
+            ("cards", "💳  Ключ-карты"),
+            ("themes", "🎨  Оформление"),
+            ("security", "🛡️  Безопасность"),
+            ("daemon", "⚡  Служба защиты"),
+            ("logs", "📋  Журнал аудита"),
+        ]
+
+        nav_box = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        nav_box.pack(fill="x", padx=12, pady=5)
+
+        for key, label in items:
+            btn = ctk.CTkButton(
+                nav_box,
+                text=label,
+                font=font_body(13),
+                anchor="w",
+                height=38,
+                corner_radius=10,
+                fg_color="transparent",
+                text_color="#a1a1aa",
+                hover_color="#1f1f23",
+                command=lambda k=key: self.show_view(k)
+            )
+            btn.pack(fill="x", pady=3)
+            self.nav_buttons[key] = btn
+
+        # --- Sidebar Footer: Test Lock Screen Button ---
+        sb_footer = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        sb_footer.pack(side="bottom", fill="x", padx=14, pady=20)
+
+        test_btn = ctk.CTkButton(
+            sb_footer,
+            text="Проверить экран ➔",
+            font=font_headline(12),
+            fg_color="#0a84ff",
+            hover_color="#0071e3",
+            corner_radius=10,
             height=34,
-            width=200
+            command=self.launch_lock_test
         )
-        self.test_lock_btn.pack(side="right", padx=25)
+        test_btn.pack(fill="x")
 
-        # Tabview
-        self.tabs = ctk.CTkTabview(
-            self,
-            fg_color="#181a24",
-            segmented_button_selected_color=self.current_theme.get("accent_color", "#00f0ff"),
-            segmented_button_selected_hover_color=self.current_theme.get("accent_hover", "#00c4d4")
+        # Container for right views
+        self.view_container = ctk.CTkFrame(self.content_area, fg_color="transparent")
+        self.view_container.pack(fill="both", expand=True, padx=32, pady=28)
+
+    def show_view(self, view_name: str):
+        """Switches active view and updates sidebar highlight."""
+        self.active_nav = view_name
+
+        for k, btn in self.nav_buttons.items():
+            if k == view_name:
+                btn.configure(fg_color="#1f1f23", text_color="#f5f5f7")
+            else:
+                btn.configure(fg_color="transparent", text_color="#a1a1aa")
+
+        for widget in self.view_container.winfo_children():
+            widget.destroy()
+
+        if view_name == "cards":
+            self._render_cards_view()
+        elif view_name == "themes":
+            self._render_themes_view()
+        elif view_name == "security":
+            self._render_security_view()
+        elif view_name == "daemon":
+            self._render_daemon_view()
+        elif view_name == "logs":
+            self._render_logs_view()
+
+    # ==========================================
+    # VIEW 1: KEYCARDS
+    # ==========================================
+
+    def _render_cards_view(self):
+        # Header
+        h_box = ctk.CTkFrame(self.view_container, fg_color="transparent")
+        h_box.pack(fill="x", pady=(0, 20))
+
+        ctk.CTkLabel(
+            h_box,
+            text="Ключ-карты и считыватель",
+            font=font_large_title(22),
+            text_color="#f5f5f7"
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            h_box,
+            text="Управление физическими NFC-ключами и считывателем ACS ACR122U.",
+            font=font_body(13),
+            text_color="#86868b"
+        ).pack(anchor="w", pady=(2, 0))
+
+        # Card 1: Add New Card Surface
+        add_card = ctk.CTkFrame(self.view_container, fg_color="#161618", corner_radius=16, border_width=1, border_color="#27272a")
+        add_card.pack(fill="x", pady=(0, 18))
+
+        top_row = ctk.CTkFrame(add_card, fg_color="transparent")
+        top_row.pack(fill="x", padx=20, pady=(16, 12))
+
+        ctk.CTkLabel(
+            top_row,
+            text="Быстрое добавление карты",
+            font=font_headline(14),
+            text_color="#f5f5f7"
+        ).pack(side="left")
+
+        self.scan_status_badge = ctk.CTkLabel(
+            top_row,
+            text="Ридер готов к чтению",
+            font=font_caption(11),
+            text_color="#86868b"
         )
-        self.tabs.pack(fill="both", expand=True, padx=20, pady=15)
+        self.scan_status_badge.pack(side="right")
 
-        self.tab_cards = self.tabs.add("💳 Ключ-карты")
-        self.tab_themes = self.tabs.add("🎨 Темы и Оформление")
-        self.tab_security = self.tabs.add("🛡️ Безопасность и Служба")
-        self.tab_logs = self.tabs.add("📋 Журнал событий")
-
-        self._build_cards_tab()
-        self._build_themes_tab()
-        self._build_security_tab()
-        self._build_logs_tab()
-
-    # --- TAB 1: CARDS MANAGEMENT ---
-
-    def _build_cards_tab(self):
-        add_frame = ctk.CTkFrame(self.tab_cards, fg_color="#1f2333", corner_radius=12)
-        add_frame.pack(fill="x", padx=15, pady=10)
-
-        add_title = ctk.CTkLabel(
-            add_frame,
-            text="Добавить новую ключ-карту",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#ffffff"
-        )
-        add_title.pack(anchor="w", padx=20, pady=(15, 10))
-
-        inputs_row = ctk.CTkFrame(add_frame, fg_color="transparent")
-        inputs_row.pack(fill="x", padx=20, pady=(0, 15))
+        inputs_row = ctk.CTkFrame(add_card, fg_color="transparent")
+        inputs_row.pack(fill="x", padx=20, pady=(0, 16))
 
         self.scan_btn = ctk.CTkButton(
             inputs_row,
-            text="📡 Сканировать с ридера",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            fg_color="#00f0ff",
-            text_color="#000000",
-            hover_color="#00c4d4",
-            command=self.start_card_scan,
+            text="Сканировать с ридера",
+            font=font_headline(12),
+            fg_color="#0a84ff",
+            hover_color="#0071e3",
+            corner_radius=10,
+            height=36,
             width=180,
-            height=36
+            command=self.start_card_scan
         )
-        self.scan_btn.pack(side="left", padx=(0, 15))
+        self.scan_btn.pack(side="left", padx=(0, 12))
 
         self.uid_entry = ctk.CTkEntry(
             inputs_row,
-            placeholder_text="UID карты (например: 04:A1:B2:C3)",
-            font=ctk.CTkFont(family="Consolas", size=13),
-            width=230,
-            height=36
+            placeholder_text="UID (например: 04:A1:B2:C3)",
+            font=font_mono(12),
+            fg_color="#1c1c1f",
+            border_color="#2c2c2e",
+            corner_radius=10,
+            height=36,
+            width=210
         )
-        self.uid_entry.pack(side="left", padx=(0, 15))
+        self.uid_entry.pack(side="left", padx=(0, 12))
 
         self.name_entry = ctk.CTkEntry(
             inputs_row,
-            placeholder_text="Название (например: Основной брелок)",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            width=230,
-            height=36
+            placeholder_text="Название ключа",
+            font=font_body(13),
+            fg_color="#1c1c1f",
+            border_color="#2c2c2e",
+            corner_radius=10,
+            height=36,
+            width=200
         )
-        self.name_entry.pack(side="left", padx=(0, 15))
+        self.name_entry.pack(side="left", padx=(0, 12))
 
-        add_card_btn = ctk.CTkButton(
+        add_btn = ctk.CTkButton(
             inputs_row,
             text="+ Добавить",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            fg_color="#10b981",
-            hover_color="#059669",
-            command=self.add_card_clicked,
-            width=120,
-            height=36
+            font=font_headline(12),
+            fg_color="#30d158",
+            text_color="#000000",
+            hover_color="#28b84d",
+            corner_radius=10,
+            height=36,
+            width=110,
+            command=self.add_card_clicked
         )
-        add_card_btn.pack(side="left")
+        add_btn.pack(side="left")
 
-        self.scan_status_lbl = ctk.CTkLabel(
-            add_frame,
-            text="Приложите карту к ACR122U или нажмите 'Сканировать'",
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color="#7f8ea3"
-        )
-        self.scan_status_lbl.pack(anchor="w", padx=20, pady=(0, 12))
+        # Card 2: Whitelist table
+        list_card = ctk.CTkFrame(self.view_container, fg_color="#161618", corner_radius=16, border_width=1, border_color="#27272a")
+        list_card.pack(fill="both", expand=True)
 
-        cards_list_header = ctk.CTkLabel(
-            self.tab_cards,
-            text="Зарегистрированные ключ-карты (Белый список):",
-            font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
-            text_color="#ffffff"
-        )
-        cards_list_header.pack(anchor="w", padx=20, pady=(10, 5))
+        list_header = ctk.CTkFrame(list_card, fg_color="transparent")
+        list_header.pack(fill="x", padx=20, pady=(14, 8))
 
-        self.cards_scroll = ctk.CTkScrollableFrame(self.tab_cards, fg_color="#141724", corner_radius=10)
-        self.cards_scroll.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+        ctk.CTkLabel(
+            list_header,
+            text="Зарегистрированные ключи доступа",
+            font=font_headline(14),
+            text_color="#f5f5f7"
+        ).pack(side="left")
+
+        self.cards_scroll = ctk.CTkScrollableFrame(list_card, fg_color="transparent")
+        self.cards_scroll.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+        self._load_cards_list()
 
     def start_card_scan(self):
-        self.scan_btn.configure(state="disabled", text="⏳ Ожидание карты...")
-        self.scan_status_lbl.configure(text="Приложите карту к ACR122U прямо сейчас...", text_color="#00f0ff")
+        self.scan_btn.configure(state="disabled", text="Ожидание карты...")
+        self.scan_status_badge.configure(text="Приложите карту к ACR122U...", text_color="#0a84ff")
 
         def worker():
-            uid = self.reader.read_single_card(timeout_seconds=8.0)
+            uid = self.reader.read_single_card(timeout_seconds=7.0)
             self.after(0, self._on_scan_finished, uid)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_scan_finished(self, uid: Optional[str]):
-        self.scan_btn.configure(state="normal", text="📡 Сканировать с ридера")
+        self.scan_btn.configure(state="normal", text="Сканировать с ридера")
         if uid:
             norm = normalize_uid(uid)
             self.uid_entry.delete(0, "end")
             self.uid_entry.insert(0, norm)
-            self.scan_status_lbl.configure(text=f"✓ Карта обнаружена! UID: {norm}", text_color="#10b981")
+            self.scan_status_badge.configure(text=f"Карта распознана: {norm}", text_color="#30d158")
             self.reader.beep_success()
         else:
-            self.scan_status_lbl.configure(
-                text="✗ Таймаут. Карта не была приложена или ридер не подключен",
-                text_color="#ef4444"
-            )
+            self.scan_status_badge.configure(text="Таймаут считывания", text_color="#ff453a")
 
     def add_card_clicked(self):
         uid = self.uid_entry.get().strip()
         name = self.name_entry.get().strip()
         if not uid:
-            messagebox.showwarning("Внимание", "Пожалуйста, укажите или отсканируйте UID карты.")
+            messagebox.showwarning("Внимание", "Пожалуйста, укажите UID карты.")
             return
 
         norm = normalize_uid(uid)
-        self.cfg.add_card(norm, name or f"Карта {norm[-5:]}")
+        self.cfg.add_card(norm, name or f"Ключ {norm[-5:]}")
         self.uid_entry.delete(0, "end")
         self.name_entry.delete(0, "end")
-        self.scan_status_lbl.configure(text=f"✓ Карта {norm} успешно сохранена!", text_color="#10b981")
+        self.scan_status_badge.configure(text=f"Ключ {norm} сохранен", text_color="#30d158")
         self._load_cards_list()
 
     def _load_cards_list(self):
-        for widget in self.cards_scroll.winfo_children():
-            widget.destroy()
+        for w in self.cards_scroll.winfo_children():
+            w.destroy()
 
         cards = self.cfg.get_cards()
         if not cards:
-            empty_lbl = ctk.CTkLabel(
-                self.cards_scroll,
-                text="Белый список пуст. Добавьте хотя бы одну карту, чтобы активировать защиту!",
-                font=ctk.CTkFont(family="Segoe UI", size=13),
-                text_color="#f59e0b"
-            )
-            empty_lbl.pack(pady=40)
+            empty_box = ctk.CTkFrame(self.cards_scroll, fg_color="transparent")
+            empty_box.pack(pady=40)
+            ctk.CTkLabel(
+                empty_box,
+                text="Список пуст",
+                font=font_headline(14),
+                text_color="#71717a"
+            ).pack()
+            ctk.CTkLabel(
+                empty_box,
+                text="Добавьте хотя бы одну карту для активации аппаратной защиты.",
+                font=font_body(12),
+                text_color="#52525b"
+            ).pack(pady=(4, 0))
             return
 
         for card in cards:
-            c_frame = ctk.CTkFrame(self.cards_scroll, fg_color="#1e2233", corner_radius=8)
-            c_frame.pack(fill="x", pady=5, padx=5)
+            row = ctk.CTkFrame(self.cards_scroll, fg_color="#1c1c1f", corner_radius=10, height=52)
+            row.pack(fill="x", pady=4)
+            row.pack_propagate(False)
 
-            is_enabled = card.get("enabled", True)
-            status_text = "● АКТИВНА" if is_enabled else "○ ОТКЛЮЧЕНА"
-            status_color = "#10b981" if is_enabled else "#7f8ea3"
+            is_active = card.get("enabled", True)
+            pill_color = "#30d158" if is_active else "#71717a"
+            pill_text = "Активна" if is_active else "Отключена"
 
-            status_lbl = ctk.CTkLabel(
-                c_frame,
-                text=status_text,
-                font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-                text_color=status_color,
-                width=100
-            )
-            status_lbl.pack(side="left", padx=10)
+            # Status pill
+            pill = ctk.CTkFrame(row, fg_color="#27272a" if not is_active else "#16281b", corner_radius=8, height=24)
+            pill.pack(side="left", padx=(14, 12))
+            ctk.CTkLabel(
+                pill,
+                text=pill_text,
+                font=font_caption(10),
+                text_color=pill_color
+            ).pack(padx=8, pady=2)
 
-            info_frame = ctk.CTkFrame(c_frame, fg_color="transparent")
-            info_frame.pack(side="left", fill="x", expand=True, padx=10, pady=8)
+            # Name and UID
+            info = ctk.CTkFrame(row, fg_color="transparent")
+            info.pack(side="left", fill="x", expand=True)
 
-            name_lbl = ctk.CTkLabel(
-                info_frame,
-                text=card.get("name", "Без названия"),
-                font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
-                text_color="#ffffff",
-                anchor="w"
-            )
-            name_lbl.pack(anchor="w")
+            ctk.CTkLabel(
+                info,
+                text=card.get("name", "Ключ"),
+                font=font_headline(13),
+                text_color="#f5f5f7"
+            ).pack(anchor="w")
 
-            detail_lbl = ctk.CTkLabel(
-                info_frame,
-                text=f"UID: {card.get('uid')}  |  Добавлена: {card.get('added_at', 'Н/Д')}",
-                font=ctk.CTkFont(family="Consolas", size=12),
-                text_color="#7f8ea3",
-                anchor="w"
-            )
-            detail_lbl.pack(anchor="w")
+            ctk.CTkLabel(
+                info,
+                text=f"UID: {card.get('uid')}  ·  {card.get('added_at', '')}",
+                font=font_mono(11),
+                text_color="#86868b"
+            ).pack(anchor="w")
 
-            toggle_text = "Отключить" if is_enabled else "Включить"
+            # Actions
             toggle_btn = ctk.CTkButton(
-                c_frame,
-                text=toggle_text,
-                font=ctk.CTkFont(family="Segoe UI", size=12),
-                fg_color="#2e354f",
-                hover_color="#3d4669",
-                width=90,
-                height=30,
+                row,
+                text="Отключить" if is_active else "Включить",
+                font=font_caption(11),
+                fg_color="#27272a",
+                hover_color="#323236",
+                corner_radius=8,
+                height=28,
+                width=80,
                 command=lambda u=card["uid"]: self.toggle_card(u)
             )
             toggle_btn.pack(side="right", padx=6)
 
-            delete_btn = ctk.CTkButton(
-                c_frame,
+            del_btn = ctk.CTkButton(
+                row,
                 text="Удалить",
-                font=ctk.CTkFont(family="Segoe UI", size=12),
-                fg_color="#ef4444",
-                hover_color="#dc2626",
-                width=80,
-                height=30,
+                font=font_caption(11),
+                fg_color="#2e1a1c",
+                text_color="#ff453a",
+                hover_color="#3d2124",
+                corner_radius=8,
+                height=28,
+                width=70,
                 command=lambda u=card["uid"]: self.delete_card(u)
             )
-            delete_btn.pack(side="right", padx=(6, 12))
+            del_btn.pack(side="right", padx=(6, 14))
 
     def toggle_card(self, uid: str):
         self.cfg.toggle_card(uid)
         self._load_cards_list()
 
     def delete_card(self, uid: str):
-        if messagebox.askyesno("Подтверждение", f"Удалить карту {uid} из белого списка?"):
+        if messagebox.askyesno("Подтверждение", f"Удалить ключ {uid}?"):
             self.cfg.remove_card(uid)
             self._load_cards_list()
 
-    # --- TAB 2: THEMES & APPEARANCE ---
+    # ==========================================
+    # VIEW 2: APPEARANCE & THEMES
+    # ==========================================
 
-    def _build_themes_tab(self):
-        # Two-column container: Left = Settings, Right = Live Theme Preview
-        themes_container = ctk.CTkFrame(self.tab_themes, fg_color="transparent")
-        themes_container.pack(fill="both", expand=True, padx=10, pady=10)
+    def _render_themes_view(self):
+        h_box = ctk.CTkFrame(self.view_container, fg_color="transparent")
+        h_box.pack(fill="x", pady=(0, 20))
 
-        left_col = ctk.CTkFrame(themes_container, fg_color="transparent")
-        left_col.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        ctk.CTkLabel(
+            h_box,
+            text="Оформление и темы",
+            font=font_large_title(22),
+            text_color="#f5f5f7"
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            h_box,
+            text="Настройка визуального стиля экрана блокировки и Apple-типографики.",
+            font=font_body(13),
+            text_color="#86868b"
+        ).pack(anchor="w", pady=(2, 0))
 
-        right_col = ctk.CTkFrame(themes_container, fg_color="transparent", width=380)
-        right_col.pack(side="right", fill="both", padx=(10, 0))
-        right_col.pack_propagate(False)
+        # Split 2 columns
+        grid = ctk.CTkFrame(self.view_container, fg_color="transparent")
+        grid.pack(fill="both", expand=True)
 
-        # Left Column: Theme Selector
-        theme_frame = ctk.CTkFrame(left_col, fg_color="#1f2333", corner_radius=12)
-        theme_frame.pack(fill="x", pady=(0, 10))
+        left = ctk.CTkFrame(grid, fg_color="transparent")
+        left.pack(side="left", fill="both", expand=True, padx=(0, 16))
 
-        t_title = ctk.CTkLabel(
-            theme_frame,
-            text="Выбор темы оформления",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#ffffff"
-        )
-        t_title.pack(anchor="w", padx=20, pady=(15, 10))
+        right = ctk.CTkFrame(grid, fg_color="transparent", width=330)
+        right.pack(side="right", fill="both")
+        right.pack_propagate(False)
 
-        preset_row = ctk.CTkFrame(theme_frame, fg_color="transparent")
-        preset_row.pack(fill="x", padx=20, pady=(0, 15))
+        # Left: Controls Card
+        ctrl_card = ctk.CTkFrame(left, fg_color="#161618", corner_radius=16, border_width=1, border_color="#27272a")
+        ctrl_card.pack(fill="x", pady=(0, 16))
 
-        ctk.CTkLabel(preset_row, text="Тема экрана:", font=ctk.CTkFont(size=13)).pack(side="left", padx=(0, 15))
+        ctk.CTkLabel(
+            ctrl_card,
+            text="Цветовая палитра Apple",
+            font=font_headline(14),
+            text_color="#f5f5f7"
+        ).pack(anchor="w", padx=20, pady=(18, 10))
 
         self.theme_dropdown = ctk.CTkOptionMenu(
-            preset_row,
+            ctrl_card,
             values=list(THEME_PRESETS.keys()),
             command=self.on_theme_selected,
-            width=260,
-            height=34
+            font=font_body(13),
+            fg_color="#1c1c1f",
+            button_color="#27272a",
+            button_hover_color="#3f3f46",
+            corner_radius=10,
+            height=36,
+            width=320
         )
-        current_theme_name = self.cfg.config.get("appearance", {}).get("theme_name", "Cyberpunk (Неон)")
-        self.theme_dropdown.set(current_theme_name)
-        self.theme_dropdown.pack(side="left")
+        self.theme_dropdown.set(self.cfg.config.get("appearance", {}).get("theme_name", "Apple Dark (Тёмная macOS)"))
+        self.theme_dropdown.pack(anchor="w", padx=20, pady=(0, 18))
 
-        # Text Customizations
-        text_frame = ctk.CTkFrame(left_col, fg_color="#1f2333", corner_radius=12)
-        text_frame.pack(fill="x", pady=10)
+        # Text card
+        text_card = ctk.CTkFrame(left, fg_color="#161618", corner_radius=16, border_width=1, border_color="#27272a")
+        text_card.pack(fill="x")
 
         ctk.CTkLabel(
-            text_frame,
-            text="Кастомизация текста экрана",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#ffffff"
-        ).pack(anchor="w", padx=20, pady=(15, 10))
+            text_card,
+            text="Настройка текстов экрана",
+            font=font_headline(14),
+            text_color="#f5f5f7"
+        ).pack(anchor="w", padx=20, pady=(18, 12))
 
-        t_row1 = ctk.CTkFrame(text_frame, fg_color="transparent")
-        t_row1.pack(fill="x", padx=20, pady=5)
-        ctk.CTkLabel(t_row1, text="Заголовок:", width=110, anchor="w").pack(side="left")
-        self.title_input = ctk.CTkEntry(t_row1, width=300)
-        self.title_input.insert(0, self.cfg.config.get("appearance", {}).get("title_text", "NFC WINDOWS GUARD"))
-        self.title_input.pack(side="left")
+        ctk.CTkLabel(text_card, text="Заголовок:", font=font_caption(11), text_color="#86868b").pack(anchor="w", padx=20)
+        self.title_input = ctk.CTkEntry(
+            text_card,
+            font=font_body(13),
+            fg_color="#1c1c1f",
+            border_color="#2c2c2e",
+            corner_radius=10,
+            height=34,
+            width=340
+        )
+        self.title_input.insert(0, self.cfg.config.get("appearance", {}).get("title_text", "Ключ-карта"))
+        self.title_input.pack(anchor="w", padx=20, pady=(4, 12))
 
-        t_row2 = ctk.CTkFrame(text_frame, fg_color="transparent")
-        t_row2.pack(fill="x", padx=20, pady=5)
-        ctk.CTkLabel(t_row2, text="Подсказка:", width=110, anchor="w").pack(side="left")
-        self.sub_input = ctk.CTkEntry(t_row2, width=300)
-        self.sub_input.insert(0, self.cfg.config.get("appearance", {}).get("subtitle_text", "Приложите карту к считывателю"))
-        self.sub_input.pack(side="left")
+        ctk.CTkLabel(text_card, text="Подсказка:", font=font_caption(11), text_color="#86868b").pack(anchor="w", padx=20)
+        self.sub_input = ctk.CTkEntry(
+            text_card,
+            font=font_body(13),
+            fg_color="#1c1c1f",
+            border_color="#2c2c2e",
+            corner_radius=10,
+            height=34,
+            width=340
+        )
+        self.sub_input.insert(0, self.cfg.config.get("appearance", {}).get("subtitle_text", "Приложите карту доступа к считывателю"))
+        self.sub_input.pack(anchor="w", padx=20, pady=(4, 14))
 
         self.show_uid_var = ctk.BooleanVar(value=self.cfg.config.get("appearance", {}).get("show_uid_on_screen", True))
-        t_chk = ctk.CTkCheckBox(
-            text_frame,
-            text="Отображать считанный UID на экране во время проверки",
-            variable=self.show_uid_var
-        )
-        t_chk.pack(anchor="w", padx=20, pady=12)
+        ctk.CTkCheckBox(
+            text_card,
+            text="Отображать считанный UID на экране",
+            font=font_body(12),
+            variable=self.show_uid_var,
+            corner_radius=6,
+            border_width=1,
+            fg_color="#0a84ff"
+        ).pack(anchor="w", padx=20, pady=(0, 16))
 
-        save_appearance_btn = ctk.CTkButton(
-            text_frame,
-            text="💾 Сохранить текст",
-            fg_color="#00f0ff",
-            text_color="#000000",
-            hover_color="#00c4d4",
-            command=self.save_appearance,
+        save_txt_btn = ctk.CTkButton(
+            text_card,
+            text="Сохранить параметры",
+            font=font_headline(12),
+            fg_color="#0a84ff",
+            hover_color="#0071e3",
+            corner_radius=10,
+            height=34,
             width=180,
-            height=34
+            command=self.save_appearance
         )
-        save_appearance_btn.pack(anchor="w", padx=20, pady=(0, 15))
+        save_txt_btn.pack(anchor="w", padx=20, pady=(0, 20))
 
-        # Right Column: Interactive Live Theme Preview Card
+        # Right: Live Apple Lock Screen Mini Preview
         ctk.CTkLabel(
-            right_col,
-            text="Предпросмотр темы экрана блокировки:",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            text_color="#ffffff"
+            right,
+            text="Предпросмотр экрана блокировки",
+            font=font_headline(13),
+            text_color="#86868b"
         ).pack(anchor="w", pady=(0, 8))
 
-        self.preview_box = ctk.CTkFrame(right_col, fg_color=self.current_theme["bg_color"], corner_radius=12)
-        self.preview_box.pack(fill="both", expand=True)
+        theme = self.cfg.get_current_theme()
+        self.prev_box = ctk.CTkFrame(right, fg_color=theme["bg_color"], corner_radius=16, border_width=1, border_color="#27272a")
+        self.prev_box.pack(fill="both", expand=True)
 
-        self.preview_card = ctk.CTkFrame(
-            self.preview_box,
-            fg_color=self.current_theme["card_bg"],
-            border_width=2,
-            border_color=self.current_theme["border_color"],
-            corner_radius=15,
-            width=320,
-            height=380
+        self.prev_clock = ctk.CTkLabel(
+            self.prev_box,
+            text="17:35",
+            font=font_clock(38),
+            text_color=theme["text_primary"]
         )
-        self.preview_card.place(relx=0.5, rely=0.5, anchor="center")
-        self.preview_card.pack_propagate(False)
+        self.prev_clock.pack(pady=(28, 2))
+
+        self.prev_card = ctk.CTkFrame(
+            self.prev_box,
+            fg_color=theme["card_bg"],
+            corner_radius=16,
+            border_width=1,
+            border_color=theme["border_color"],
+            width=260,
+            height=240
+        )
+        self.prev_card.pack(pady=(10, 0))
+        self.prev_card.pack_propagate(False)
+
+        self.prev_glyph = ctk.CTkLabel(
+            self.prev_card,
+            text="",
+            image=create_nfc_glyph(48, theme["accent_color"], theme["bg_color"], theme["border_color"])
+        )
+        self.prev_glyph.pack(pady=(18, 6))
 
         self.prev_title = ctk.CTkLabel(
-            self.preview_card,
-            text="NFC WINDOWS GUARD",
-            font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
-            text_color=self.current_theme["text_primary"]
+            self.prev_card,
+            text=self.title_input.get(),
+            font=font_headline(13),
+            text_color=theme["text_primary"]
         )
-        self.prev_title.pack(pady=(25, 4))
-
-        self.prev_sub = ctk.CTkLabel(
-            self.preview_card,
-            text="Приложите ключ-карту к ACR122U",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color=self.current_theme["text_secondary"]
-        )
-        self.prev_sub.pack(pady=(0, 15))
-
-        self.prev_icon_box = ctk.CTkFrame(
-            self.preview_card,
-            width=70,
-            height=70,
-            corner_radius=35,
-            fg_color=self.current_theme["bg_color"],
-            border_width=2,
-            border_color=self.current_theme["accent_color"]
-        )
-        self.prev_icon_box.pack(pady=5)
-        self.prev_icon_box.pack_propagate(False)
-
-        self.prev_icon = ctk.CTkLabel(self.prev_icon_box, text="📡", font=ctk.CTkFont(size=28))
-        self.prev_icon.place(relx=0.5, rely=0.5, anchor="center")
+        self.prev_title.pack()
 
         self.prev_status = ctk.CTkLabel(
-            self.preview_card,
-            text="Ожидание карты...",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            text_color=self.current_theme["accent_color"]
+            self.prev_card,
+            text="Ожидание NFC карты",
+            font=font_caption(11),
+            text_color=theme["accent_color"]
         )
-        self.prev_status.pack(pady=(12, 2))
+        self.prev_status.pack(pady=(4, 8))
 
-        self.prev_dots = ctk.CTkLabel(
-            self.preview_card,
-            text="● ● ●",
-            font=ctk.CTkFont(size=14),
-            text_color=self.current_theme["accent_color"]
-        )
-        self.prev_dots.pack(pady=(0, 10))
-
-        self.prev_fallback = ctk.CTkButton(
-            self.preview_card,
-            text="Штатный вход Windows ➔",
-            font=ctk.CTkFont(size=11),
-            fg_color="transparent",
-            border_width=1,
-            border_color=self.current_theme["border_color"],
-            text_color=self.current_theme["text_secondary"],
-            height=26,
-            width=180
-        )
-        self.prev_fallback.pack(side="bottom", pady=15)
+        self.prev_dots = ctk.CTkFrame(self.prev_card, fg_color="transparent")
+        self.prev_dots.pack()
+        for _ in range(3):
+            ctk.CTkFrame(self.prev_dots, width=16, height=4, corner_radius=2, fg_color=theme["border_color"]).pack(side="left", padx=2)
 
     def on_theme_selected(self, theme_name: str):
         self.cfg.set_theme(theme_name)
-        self.current_theme = self.cfg.get_current_theme()
+        theme = self.cfg.get_current_theme()
 
-        # Update preview card colors
-        self.preview_box.configure(fg_color=self.current_theme["bg_color"])
-        self.preview_card.configure(
-            fg_color=self.current_theme["card_bg"],
-            border_color=self.current_theme["border_color"]
+        self.prev_box.configure(fg_color=theme["bg_color"])
+        self.prev_clock.configure(text_color=theme["text_primary"])
+        self.prev_card.configure(fg_color=theme["card_bg"], border_color=theme["border_color"])
+        self.prev_glyph.configure(
+            image=create_nfc_glyph(48, theme["accent_color"], theme["bg_color"], theme["border_color"])
         )
-        self.prev_title.configure(text_color=self.current_theme["text_primary"])
-        self.prev_sub.configure(text_color=self.current_theme["text_secondary"])
-        self.prev_icon_box.configure(
-            fg_color=self.current_theme["bg_color"],
-            border_color=self.current_theme["accent_color"]
-        )
-        self.prev_status.configure(text_color=self.current_theme["accent_color"])
-        self.prev_dots.configure(text_color=self.current_theme["accent_color"])
-        self.prev_fallback.configure(
-            border_color=self.current_theme["border_color"],
-            text_color=self.current_theme["text_secondary"]
-        )
-
-        # Update top brand & test button in settings window
-        self.brand_lbl.configure(text_color=self.current_theme.get("accent_color", "#00f0ff"))
-        self.test_lock_btn.configure(
-            fg_color=self.current_theme.get("accent_color", "#3b82f6"),
-            text_color="#000000" if self.current_theme.get("accent_color", "#3b82f6") in ["#00f0ff", "#00ff41"] else "#ffffff",
-            hover_color=self.current_theme.get("accent_hover", "#2563eb")
-        )
+        self.prev_title.configure(text_color=theme["text_primary"])
+        self.prev_status.configure(text_color=theme["accent_color"])
 
     def save_appearance(self):
         self.cfg.config["appearance"]["title_text"] = self.title_input.get().strip()
@@ -504,80 +616,38 @@ class SettingsWindow(ctk.CTk):
         self.cfg.config["appearance"]["show_uid_on_screen"] = self.show_uid_var.get()
         self.cfg.save()
         self.prev_title.configure(text=self.title_input.get().strip())
-        self.prev_sub.configure(text=self.sub_input.get().strip())
-        messagebox.showinfo("Успешно", "Настройки оформления сохранены!")
+        messagebox.showinfo("Успешно", "Параметры оформления сохранены!")
 
-    # --- TAB 3: SECURITY & DAEMON SERVICE ---
+    # ==========================================
+    # VIEW 3: SECURITY
+    # ==========================================
 
-    def _build_security_tab(self):
-        # Service Control Section
-        daemon_frame = ctk.CTkFrame(self.tab_security, fg_color="#1f2333", corner_radius=12)
-        daemon_frame.pack(fill="x", padx=15, pady=10)
-
-        ctk.CTkLabel(
-            daemon_frame,
-            text="Фоновая служба защиты (Win+L и блокировка сессий)",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#ffffff"
-        ).pack(anchor="w", padx=20, pady=(15, 8))
+    def _render_security_view(self):
+        h_box = ctk.CTkFrame(self.view_container, fg_color="transparent")
+        h_box.pack(fill="x", pady=(0, 20))
 
         ctk.CTkLabel(
-            daemon_frame,
-            text="Служба отслеживает ручную блокировку (Win+L), сочетание Ctrl+Alt+L, выход из сна и блокировку всех мониторов.",
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            text_color="#7f8ea3"
-        ).pack(anchor="w", padx=20, pady=(0, 10))
-
-        d_ctrl_row = ctk.CTkFrame(daemon_frame, fg_color="transparent")
-        d_ctrl_row.pack(fill="x", padx=20, pady=(0, 15))
-
-        self.daemon_status_lbl = ctk.CTkLabel(
-            d_ctrl_row,
-            text="Статус: проверка...",
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            width=220,
-            anchor="w"
-        )
-        self.daemon_status_lbl.pack(side="left")
-
-        self.btn_start_daemon = ctk.CTkButton(
-            d_ctrl_row,
-            text="▶ Запустить службу",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#10b981",
-            hover_color="#059669",
-            width=150,
-            command=self.start_daemon_clicked
-        )
-        self.btn_start_daemon.pack(side="left", padx=10)
-
-        self.btn_stop_daemon = ctk.CTkButton(
-            d_ctrl_row,
-            text="⏹ Остановить",
-            font=ctk.CTkFont(size=12),
-            fg_color="#ef4444",
-            hover_color="#dc2626",
-            width=120,
-            command=self.stop_daemon_clicked
-        )
-        self.btn_stop_daemon.pack(side="left", padx=5)
-
-        # Policy & Attempts
-        sec_frame = ctk.CTkFrame(self.tab_security, fg_color="#1f2333", corner_radius=12)
-        sec_frame.pack(fill="x", padx=15, pady=10)
-
+            h_box,
+            text="Безопасность и политики",
+            font=font_large_title(22),
+            text_color="#f5f5f7"
+        ).pack(anchor="w")
         ctk.CTkLabel(
-            sec_frame,
-            text="Политика попыток и действий",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#ffffff"
-        ).pack(anchor="w", padx=20, pady=(15, 10))
+            h_box,
+            text="Лимиты попыток, звуковые сигналы ACR122U и экстренный мастер-PIN.",
+            font=font_body(13),
+            text_color="#86868b"
+        ).pack(anchor="w", pady=(2, 0))
 
-        row_att = ctk.CTkFrame(sec_frame, fg_color="transparent")
-        row_att.pack(fill="x", padx=20, pady=5)
+        sec_card = ctk.CTkFrame(self.view_container, fg_color="#161618", corner_radius=16, border_width=1, border_color="#27272a")
+        sec_card.pack(fill="x", pady=(0, 16))
+
+        # Attempts row
+        row_att = ctk.CTkFrame(sec_card, fg_color="transparent")
+        row_att.pack(fill="x", padx=20, pady=(18, 10))
 
         curr_att = self.cfg.config.get("security", {}).get("max_attempts", 3)
-        self.att_lbl = ctk.CTkLabel(row_att, text=f"Количество попыток ввода карты: {curr_att}", width=300, anchor="w")
+        self.att_lbl = ctk.CTkLabel(row_att, text=f"Количество попыток карты: {curr_att}", font=font_headline(13), width=280, anchor="w")
         self.att_lbl.pack(side="left")
 
         self.att_slider = ctk.CTkSlider(
@@ -585,20 +655,27 @@ class SettingsWindow(ctk.CTk):
             from_=1,
             to=10,
             number_of_steps=9,
-            command=self._on_slider_change,
-            width=200
+            command=lambda v: self.att_lbl.configure(text=f"Количество попыток карты: {int(v)}"),
+            button_color="#0a84ff",
+            progress_color="#0a84ff",
+            width=220
         )
         self.att_slider.set(curr_att)
         self.att_slider.pack(side="left", padx=10)
 
-        row_act = ctk.CTkFrame(sec_frame, fg_color="transparent")
+        # Action row
+        row_act = ctk.CTkFrame(sec_card, fg_color="transparent")
         row_act.pack(fill="x", padx=20, pady=10)
 
-        ctk.CTkLabel(row_act, text="Действие после исчерпания попыток:", width=300, anchor="w").pack(side="left")
+        ctk.CTkLabel(row_act, text="Действие при исчерпании:", font=font_headline(13), width=280, anchor="w").pack(side="left")
         self.action_dropdown = ctk.CTkOptionMenu(
             row_act,
             values=["lock_workstation (Штатный вход Windows)", "shutdown (Выключение)", "restart (Перезагрузка)"],
-            width=300
+            font=font_body(12),
+            fg_color="#1c1c1f",
+            button_color="#27272a",
+            corner_radius=10,
+            width=280
         )
         curr_act = self.cfg.config.get("security", {}).get("action_on_fail", "lock_workstation")
         for val in self.action_dropdown._values:
@@ -607,107 +684,69 @@ class SettingsWindow(ctk.CTk):
                 break
         self.action_dropdown.pack(side="left")
 
+        # Toggles
         self.fallback_var = ctk.BooleanVar(value=self.cfg.config.get("security", {}).get("allow_manual_fallback", True))
-        chk_fallback = ctk.CTkCheckBox(
-            sec_frame,
-            text="Разрешить кнопку перехода к штатному входу сразу (до исчерпания попыток)",
-            variable=self.fallback_var
-        )
-        chk_fallback.pack(anchor="w", padx=20, pady=8)
+        ctk.CTkCheckBox(
+            sec_card,
+            text="Разрешить кнопку перехода к штатному входу сразу",
+            font=font_body(12),
+            variable=self.fallback_var,
+            corner_radius=6,
+            fg_color="#0a84ff"
+        ).pack(anchor="w", padx=20, pady=8)
 
         self.beep_success_var = ctk.BooleanVar(value=self.cfg.config.get("security", {}).get("beep_on_success", True))
-        chk_beep1 = ctk.CTkCheckBox(
-            sec_frame,
-            text="Звуковой сигнал ACR122U при успешном входе",
-            variable=self.beep_success_var
-        )
-        chk_beep1.pack(anchor="w", padx=20, pady=5)
+        ctk.CTkCheckBox(
+            sec_card,
+            text="Звуковой сигнал зуммера ACR122U при успешном входе",
+            font=font_body(12),
+            variable=self.beep_success_var,
+            corner_radius=6,
+            fg_color="#0a84ff"
+        ).pack(anchor="w", padx=20, pady=6)
 
         self.beep_error_var = ctk.BooleanVar(value=self.cfg.config.get("security", {}).get("beep_on_error", True))
-        chk_beep2 = ctk.CTkCheckBox(
-            sec_frame,
-            text="Звуковой сигнал ошибки ACR122U при чужой карте",
-            variable=self.beep_error_var
+        ctk.CTkCheckBox(
+            sec_card,
+            text="Предупреждающий сигнал ACR122U при неверной карте",
+            font=font_body(12),
+            variable=self.beep_error_var,
+            corner_radius=6,
+            fg_color="#0a84ff"
+        ).pack(anchor="w", padx=20, pady=(6, 16))
+
+        # PIN card
+        pin_card = ctk.CTkFrame(self.view_container, fg_color="#161618", corner_radius=16, border_width=1, border_color="#27272a")
+        pin_card.pack(fill="x")
+
+        row_pin = ctk.CTkFrame(pin_card, fg_color="transparent")
+        row_pin.pack(fill="x", padx=20, pady=18)
+
+        ctk.CTkLabel(row_pin, text="Экстренный мастер-PIN:", font=font_headline(13), width=280, anchor="w").pack(side="left")
+        self.pin_entry = ctk.CTkEntry(
+            row_pin,
+            placeholder_text="Новый PIN / пароль",
+            font=font_body(13),
+            show="*",
+            fg_color="#1c1c1f",
+            border_color="#2c2c2e",
+            corner_radius=10,
+            width=200
         )
-        chk_beep2.pack(anchor="w", padx=20, pady=5)
-
-        row_pin = ctk.CTkFrame(sec_frame, fg_color="transparent")
-        row_pin.pack(fill="x", padx=20, pady=(10, 15))
-
-        ctk.CTkLabel(row_pin, text="Экстренный мастер-PIN (на случай утери карт):", width=320, anchor="w").pack(side="left")
-        self.pin_entry = ctk.CTkEntry(row_pin, placeholder_text="Новый PIN / пароль", show="*", width=180)
-        self.pin_entry.pack(side="left", padx=10)
-
-        # Autostart Registration
-        start_frame = ctk.CTkFrame(self.tab_security, fg_color="#1f2333", corner_radius=12)
-        start_frame.pack(fill="x", padx=15, pady=10)
-
-        ctk.CTkLabel(
-            start_frame,
-            text="Интеграция с системой (Автозапуск Windows)",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
-            text_color="#ffffff"
-        ).pack(anchor="w", padx=20, pady=(15, 10))
-
-        self.autostart_var = ctk.BooleanVar(value=is_autostart_enabled())
-        self.chk_autostart = ctk.CTkCheckBox(
-            start_frame,
-            text="Запускать фоновую службу защиты при старте Windows (Windows Startup)",
-            variable=self.autostart_var,
-            command=self._on_autostart_toggled
-        )
-        self.chk_autostart.pack(anchor="w", padx=20, pady=10)
+        self.pin_entry.pack(side="left")
 
         save_sec_btn = ctk.CTkButton(
-            self.tab_security,
-            text="💾 Применить настройки безопасности",
-            fg_color="#00f0ff",
-            text_color="#000000",
-            hover_color="#00c4d4",
-            command=self.save_security,
+            self.view_container,
+            text="Сохранить настройки безопасности",
+            font=font_headline(12),
+            fg_color="#0a84ff",
+            hover_color="#0071e3",
+            corner_radius=10,
+            height=36,
             width=260,
-            height=36
+            command=self.save_security
         )
-        save_sec_btn.pack(anchor="w", padx=15, pady=10)
-
-    def _update_daemon_status_lbl(self):
-        active = is_daemon_running()
-        if active:
-            self.daemon_status_lbl.configure(text="● Служба: АКТИВНА", text_color="#10b981")
-            self.btn_start_daemon.configure(state="disabled")
-            self.btn_stop_daemon.configure(state="normal")
-        else:
-            self.daemon_status_lbl.configure(text="○ Служба: ОСТАНОВЛЕНА", text_color="#ef4444")
-            self.btn_start_daemon.configure(state="normal")
-            self.btn_stop_daemon.configure(state="disabled")
-
-        # Periodically refresh status
-        self.after(3000, self._update_daemon_status_lbl)
-
-    def start_daemon_clicked(self):
-        main_py = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "main.py"))
-        exe = get_pythonw_executable()
-        subprocess.Popen([exe, main_py, "--daemon"])
-        self.after(1000, self._update_daemon_status_lbl)
-        messagebox.showinfo("Служба запущена", "Фоновая служба NFC Guard успешно запущена и работает в трее!")
-
-    def stop_daemon_clicked(self):
-        # Kill daemon process via taskkill
-        subprocess.run(["taskkill", "/F", "/IM", "pythonw.exe"], capture_output=True)
-        self.after(1000, self._update_daemon_status_lbl)
-        messagebox.showinfo("Служба остановлена", "Фоновая служба остановлена.")
-
-    def _on_slider_change(self, val):
-        self.att_lbl.configure(text=f"Количество попыток ввода карты: {int(val)}")
-
-    def _on_autostart_toggled(self):
-        enabled = self.autostart_var.get()
-        success, msg = set_autostart(enabled)
-        if success:
-            messagebox.showinfo("Автозапуск", msg)
-        else:
-            messagebox.showerror("Ошибка", msg)
-            self.autostart_var.set(not enabled)
+        save_sec_btn.pack(anchor="w", pady=18)
 
     def save_security(self):
         sec = self.cfg.config["security"]
@@ -731,54 +770,212 @@ class SettingsWindow(ctk.CTk):
             self.pin_entry.delete(0, "end")
 
         self.cfg.save()
-        messagebox.showinfo("Успешно", "Настройки безопасности успешно обновлены!")
+        messagebox.showinfo("Успешно", "Настройки безопасности сохранены!")
 
-    # --- TAB 4: AUDIT LOGS ---
+    # ==========================================
+    # VIEW 4: BACKGROUND DAEMON SERVICE
+    # ==========================================
 
-    def _build_logs_tab(self):
-        log_ctrl_row = ctk.CTkFrame(self.tab_logs, fg_color="transparent")
-        log_ctrl_row.pack(fill="x", padx=15, pady=10)
+    def _render_daemon_view(self):
+        h_box = ctk.CTkFrame(self.view_container, fg_color="transparent")
+        h_box.pack(fill="x", pady=(0, 20))
 
-        ctk.CTkButton(
-            log_ctrl_row,
-            text="🔄 Обновить",
+        ctk.CTkLabel(
+            h_box,
+            text="Фоновая служба защиты",
+            font=font_large_title(22),
+            text_color="#f5f5f7"
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            h_box,
+            text="Автоматическая блокировка всех дисплеев при Win+L, выходе из сна и перезагрузке.",
+            font=font_body(13),
+            text_color="#86868b"
+        ).pack(anchor="w", pady=(2, 0))
+
+        srv_card = ctk.CTkFrame(self.view_container, fg_color="#161618", corner_radius=16, border_width=1, border_color="#27272a")
+        srv_card.pack(fill="x", pady=(0, 16))
+
+        d_row = ctk.CTkFrame(srv_card, fg_color="transparent")
+        d_row.pack(fill="x", padx=20, pady=18)
+
+        self.daemon_status_lbl = ctk.CTkLabel(
+            d_row,
+            text="Проверка службы...",
+            font=font_headline(13),
+            width=230,
+            anchor="w"
+        )
+        self.daemon_status_lbl.pack(side="left")
+
+        self.btn_start_daemon = ctk.CTkButton(
+            d_row,
+            text="Запустить службу",
+            font=font_headline(12),
+            fg_color="#30d158",
+            text_color="#000000",
+            hover_color="#28b84d",
+            corner_radius=10,
+            height=34,
+            width=160,
+            command=self.start_daemon_clicked
+        )
+        self.btn_start_daemon.pack(side="left", padx=8)
+
+        self.btn_stop_daemon = ctk.CTkButton(
+            d_row,
+            text="Остановить",
+            font=font_headline(12),
+            fg_color="#27272a",
+            hover_color="#323236",
+            corner_radius=10,
+            height=34,
             width=120,
-            height=32,
-            command=self._refresh_logs
-        ).pack(side="left", padx=(0, 10))
+            command=self.stop_daemon_clicked
+        )
+        self.btn_stop_daemon.pack(side="left")
+
+        # Startup Card
+        start_card = ctk.CTkFrame(self.view_container, fg_color="#161618", corner_radius=16, border_width=1, border_color="#27272a")
+        start_card.pack(fill="x")
+
+        s_box = ctk.CTkFrame(start_card, fg_color="transparent")
+        s_box.pack(fill="x", padx=20, pady=18)
+
+        self.autostart_var = ctk.BooleanVar(value=is_autostart_enabled())
+        ctk.CTkCheckBox(
+            s_box,
+            text="Автозапуск службы при входе в Windows (рекомендуется)",
+            font=font_body(13),
+            variable=self.autostart_var,
+            corner_radius=6,
+            fg_color="#0a84ff",
+            command=self._on_autostart_toggled
+        ).pack(anchor="w")
+
+        ctk.CTkLabel(
+            s_box,
+            text="Горячая клавиша принудительной блокировки в любой момент: Ctrl + Alt + L или Win + L",
+            font=font_caption(11),
+            text_color="#86868b"
+        ).pack(anchor="w", pady=(8, 0))
+
+        self._update_daemon_status_lbl()
+
+    def _update_daemon_status_lbl(self):
+        active = is_daemon_running()
+        if hasattr(self, "daemon_status_lbl") and self.daemon_status_lbl.winfo_exists():
+            if active:
+                self.daemon_status_lbl.configure(text="● Служба активна в трее", text_color="#30d158")
+                self.btn_start_daemon.configure(state="disabled")
+                self.btn_stop_daemon.configure(state="normal")
+            else:
+                self.daemon_status_lbl.configure(text="○ Служба не запущена", text_color="#86868b")
+                self.btn_start_daemon.configure(state="normal")
+                self.btn_stop_daemon.configure(state="disabled")
+
+        self.after(3000, self._update_daemon_status_lbl)
+
+    def start_daemon_clicked(self):
+        main_py = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "main.py"))
+        exe = get_pythonw_executable()
+        subprocess.Popen([exe, main_py, "--daemon"])
+        self.after(800, self._update_daemon_status_lbl)
+        messagebox.showinfo("Служба", "Фоновая служба запущена.")
+
+    def stop_daemon_clicked(self):
+        subprocess.run(["taskkill", "/F", "/IM", "pythonw.exe"], capture_output=True)
+        self.after(800, self._update_daemon_status_lbl)
+        messagebox.showinfo("Служба", "Служба остановлена.")
+
+    def _on_autostart_toggled(self):
+        enabled = self.autostart_var.get()
+        success, msg = set_autostart(enabled)
+        if success:
+            messagebox.showinfo("Автозапуск", msg)
+        else:
+            messagebox.showerror("Ошибка", msg)
+            self.autostart_var.set(not enabled)
+
+    # ==========================================
+    # VIEW 5: AUDIT LOGS
+    # ==========================================
+
+    def _render_logs_view(self):
+        h_box = ctk.CTkFrame(self.view_container, fg_color="transparent")
+        h_box.pack(fill="x", pady=(0, 20))
+
+        ctk.CTkLabel(
+            h_box,
+            text="Журнал событий доступа",
+            font=font_large_title(22),
+            text_color="#f5f5f7"
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            h_box,
+            text="История успешных авторизаций, отклоненных карт и системных событий.",
+            font=font_body(13),
+            text_color="#86868b"
+        ).pack(anchor="w", pady=(2, 0))
+
+        log_card = ctk.CTkFrame(self.view_container, fg_color="#161618", corner_radius=16, border_width=1, border_color="#27272a")
+        log_card.pack(fill="both", expand=True)
+
+        btn_row = ctk.CTkFrame(log_card, fg_color="transparent")
+        btn_row.pack(fill="x", padx=18, pady=(14, 10))
 
         ctk.CTkButton(
-            log_ctrl_row,
-            text="🗑️ Очистить журнал",
-            fg_color="#ef4444",
-            hover_color="#dc2626",
-            width=140,
-            height=32,
+            btn_row,
+            text="Обновить",
+            font=font_caption(11),
+            fg_color="#27272a",
+            hover_color="#323236",
+            corner_radius=8,
+            height=30,
+            width=100,
+            command=self._refresh_logs
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            btn_row,
+            text="Очистить",
+            font=font_caption(11),
+            fg_color="#2e1a1c",
+            text_color="#ff453a",
+            hover_color="#3d2124",
+            corner_radius=8,
+            height=30,
+            width=90,
             command=self._clear_logs
         ).pack(side="left")
 
         self.log_textbox = ctk.CTkTextbox(
-            self.tab_logs,
-            font=ctk.CTkFont(family="Consolas", size=12),
-            fg_color="#141724"
+            log_card,
+            font=font_mono(11),
+            fg_color="#111113",
+            corner_radius=10,
+            border_width=1,
+            border_color="#27272a"
         )
-        self.log_textbox.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+        self.log_textbox.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        self._refresh_logs()
 
     def _refresh_logs(self):
+        if not hasattr(self, "log_textbox") or not self.log_textbox.winfo_exists():
+            return
         logs = self.cfg.read_recent_logs(200)
         self.log_textbox.delete("1.0", "end")
         if not logs:
-            self.log_textbox.insert("end", "Журнал событий пока пуст.")
+            self.log_textbox.insert("end", "Журнал пуст.")
         else:
             self.log_textbox.insert("end", "\n".join(logs))
 
     def _clear_logs(self):
-        if messagebox.askyesno("Подтверждение", "Очистить историю журнала событий?"):
+        if messagebox.askyesno("Подтверждение", "Очистить историю событий?"):
             self.cfg.clear_logs()
             self._refresh_logs()
 
     def launch_lock_test(self):
-        """Launches the real lock screen in a separate clean process across all monitors."""
         main_py = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "main.py"))
         exe = get_pythonw_executable()
         subprocess.Popen([exe, main_py, "--lock"])

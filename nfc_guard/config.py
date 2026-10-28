@@ -1,5 +1,5 @@
 """Configuration Manager for NFC Windows Guard.
-Handles loading, saving, card whitelist management, themes, and security settings.
+Apple Design Language presets, card whitelisting, and security policies.
 """
 
 import json
@@ -12,112 +12,105 @@ APPDATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "
 CONFIG_FILE = os.path.join(APPDATA_DIR, "config.json")
 LOG_FILE = os.path.join(APPDATA_DIR, "access.log")
 
-# Theme Presets
+# Apple Design System Theme Presets
 THEME_PRESETS: Dict[str, Dict[str, str]] = {
-    "Cyberpunk (Неон)": {
-        "bg_color": "#0d0e15",
-        "card_bg": "#151828",
-        "border_color": "#00f0ff",
-        "accent_color": "#00f0ff",
-        "accent_hover": "#00c4d4",
-        "text_primary": "#ffffff",
-        "text_secondary": "#7f8ea3",
-        "success_color": "#00ff88",
-        "error_color": "#ff0055",
-        "warning_color": "#ffaa00",
+    "Apple Dark (Тёмная macOS)": {
+        "bg_color": "#09090b",
+        "card_bg": "#18181b",
+        "border_color": "#27272a",
+        "accent_color": "#0a84ff",
+        "accent_hover": "#0071e3",
+        "text_primary": "#f5f5f7",
+        "text_secondary": "#86868b",
+        "success_color": "#30d158",
+        "error_color": "#ff453a",
+        "warning_color": "#ff9f0a",
     },
-    "Тёмная (Dark Modern)": {
-        "bg_color": "#121214",
-        "card_bg": "#1e1e24",
-        "border_color": "#2e2e38",
-        "accent_color": "#3b82f6",
-        "accent_hover": "#2563eb",
-        "text_primary": "#f8fafc",
-        "text_secondary": "#94a3b8",
-        "success_color": "#10b981",
-        "error_color": "#ef4444",
-        "warning_color": "#f59e0b",
-    },
-    "Матрица (Matrix Hacker)": {
-        "bg_color": "#040d06",
-        "card_bg": "#081a0c",
-        "border_color": "#00ff41",
-        "accent_color": "#00ff41",
-        "accent_hover": "#00cc33",
-        "text_primary": "#e6ffe6",
-        "text_secondary": "#009926",
-        "success_color": "#00ff41",
-        "error_color": "#ff3333",
-        "warning_color": "#ffcc00",
-    },
-    "Полночь (Midnight Blue)": {
-        "bg_color": "#090d16",
-        "card_bg": "#131b2e",
-        "border_color": "#1e2c4a",
+    "Apple Midnight (Полночь)": {
+        "bg_color": "#080c14",
+        "card_bg": "#0f172a",
+        "border_color": "#1e293b",
         "accent_color": "#6366f1",
         "accent_hover": "#4f46e5",
-        "text_primary": "#f1f5f9",
-        "text_secondary": "#64748b",
-        "success_color": "#22c55e",
-        "error_color": "#f43f5e",
-        "warning_color": "#eab308",
+        "text_primary": "#f8fafc",
+        "text_secondary": "#94a3b8",
+        "success_color": "#30d158",
+        "error_color": "#ff453a",
+        "warning_color": "#ff9f0a",
     },
-    "Светлая (Clean Minimal)": {
-        "bg_color": "#f1f5f9",
+    "Apple Space Gray (Титан)": {
+        "bg_color": "#121214",
+        "card_bg": "#1c1c1f",
+        "border_color": "#323236",
+        "accent_color": "#e2e8f0",
+        "accent_hover": "#cbd5e1",
+        "text_primary": "#f5f5f7",
+        "text_secondary": "#86868b",
+        "success_color": "#30d158",
+        "error_color": "#ff453a",
+        "warning_color": "#ff9f0a",
+    },
+    "Apple Forest (Альпийская зелень)": {
+        "bg_color": "#060d09",
+        "card_bg": "#0d1a12",
+        "border_color": "#193324",
+        "accent_color": "#34d399",
+        "accent_hover": "#10b981",
+        "text_primary": "#f0fdf4",
+        "text_secondary": "#86efac",
+        "success_color": "#30d158",
+        "error_color": "#ff453a",
+        "warning_color": "#ff9f0a",
+    },
+    "Apple Crimson (Глубокий рубин)": {
+        "bg_color": "#0f080a",
+        "card_bg": "#1c1014",
+        "border_color": "#331c24",
+        "accent_color": "#fb7185",
+        "accent_hover": "#f43f5e",
+        "text_primary": "#fff1f2",
+        "text_secondary": "#fda4af",
+        "success_color": "#30d158",
+        "error_color": "#ff453a",
+        "warning_color": "#ff9f0a",
+    },
+    "Apple Light (Светлая macOS)": {
+        "bg_color": "#f5f5f7",
         "card_bg": "#ffffff",
-        "border_color": "#cbd5e1",
-        "accent_color": "#2563eb",
-        "accent_hover": "#1d4ed8",
-        "text_primary": "#0f172a",
-        "text_secondary": "#64748b",
-        "success_color": "#16a34a",
-        "error_color": "#dc2626",
-        "warning_color": "#d97706",
-    },
-    "Красная тревога (Red Alert)": {
-        "bg_color": "#120808",
-        "card_bg": "#200d0d",
-        "border_color": "#ef4444",
-        "accent_color": "#ef4444",
-        "accent_hover": "#dc2626",
-        "text_primary": "#ffffff",
-        "text_secondary": "#995555",
-        "success_color": "#22c55e",
-        "error_color": "#ef4444",
-        "warning_color": "#f59e0b",
+        "border_color": "#e5e5ea",
+        "accent_color": "#0071e3",
+        "accent_hover": "#0058b0",
+        "text_primary": "#1d1d1f",
+        "text_secondary": "#86868b",
+        "success_color": "#34c759",
+        "error_color": "#ff3b30",
+        "warning_color": "#ff9500",
     }
 }
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    "version": "1.0.0",
+    "version": "2.0.0",
     "security": {
         "max_attempts": 3,
-        "action_on_fail": "lock_workstation",  # "lock_workstation", "shutdown", "restart"
-        "allow_manual_fallback": True,        # Button "Штатный вход Windows"
-        "master_pin_hash": "",                 # SHA-256 for admin bypass/settings
-        "lock_on_boot": True,                  # Open lock overlay on PC start
-        "beep_on_success": True,               # Hardware beep on ACR122U
-        "beep_on_error": True,                 # Hardware buzzer on wrong card
-        "cooldown_seconds": 1,                 # Debounce delay between reads
+        "action_on_fail": "lock_workstation",
+        "allow_manual_fallback": True,
+        "master_pin_hash": "",
+        "lock_on_boot": True,
+        "beep_on_success": True,
+        "beep_on_error": True,
+        "cooldown_seconds": 1.0,
     },
     "appearance": {
-        "theme_name": "Cyberpunk (Неон)",
-        "custom_colors": THEME_PRESETS["Cyberpunk (Неон)"].copy(),
-        "title_text": "NFC WINDOWS GUARD",
-        "subtitle_text": "Приложите ключ-карту к считывателю ACR122U",
+        "theme_name": "Apple Dark (Тёмная macOS)",
+        "custom_colors": THEME_PRESETS["Apple Dark (Тёмная macOS)"].copy(),
+        "title_text": "Ключ-карта",
+        "subtitle_text": "Приложите карту доступа к считывателю",
         "show_uid_on_screen": True,
         "show_attempts_counter": True,
+        "show_clock": True,
         "fullscreen": True,
     },
-    "cards": [
-        # Example format:
-        # {
-        #     "uid": "04:A1:B2:C3",
-        #     "name": "Основной ключ",
-        #     "added_at": "2026-10-28 12:00:00",
-        #     "enabled": True
-        # }
-    ]
+    "cards": []
 }
 
 
@@ -152,20 +145,27 @@ class ConfigManager:
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # Merge with defaults to ensure missing keys don't break
             cfg = DEFAULT_CONFIG.copy()
             for key in ["security", "appearance"]:
                 if key in data:
                     cfg[key] = {**DEFAULT_CONFIG[key], **data[key]}
             if "cards" in data:
                 cfg["cards"] = data["cards"]
+
+            # Migrate old theme names if user had previous cyberpunk/matrix names
+            tname = cfg["appearance"].get("theme_name", "")
+            if tname not in THEME_PRESETS:
+                cfg["appearance"]["theme_name"] = "Apple Dark (Тёмная macOS)"
+                cfg["appearance"]["custom_colors"] = THEME_PRESETS["Apple Dark (Тёмная macOS)"].copy()
+                cfg["appearance"]["title_text"] = "Ключ-карта"
+                cfg["appearance"]["subtitle_text"] = "Приложите карту доступа к считывателю"
+
             return cfg
         except Exception as e:
-            print(f"[Config] Error loading config, restoring default: {e}")
+            print(f"[Config] Error loading config: {e}")
             return DEFAULT_CONFIG.copy()
 
     def save(self, data: Optional[Dict[str, Any]] = None):
-        """Saves current configuration to disk."""
         if data is not None:
             self.config = data
         try:
@@ -181,7 +181,6 @@ class ConfigManager:
         return self.config.get("cards", [])
 
     def is_card_authorized(self, uid: str) -> bool:
-        """Checks if a card UID is in the whitelist and enabled."""
         norm = normalize_uid(uid)
         for card in self.get_cards():
             if normalize_uid(card.get("uid", "")) == norm and card.get("enabled", True):
@@ -196,7 +195,6 @@ class ConfigManager:
         return None
 
     def add_card(self, uid: str, name: str) -> bool:
-        """Adds or updates a card in the whitelist."""
         norm = normalize_uid(uid)
         if not norm:
             return False
@@ -212,7 +210,7 @@ class ConfigManager:
         cards.append({
             "uid": norm,
             "name": name or f"Карта {len(cards) + 1}",
-            "added_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "added_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "enabled": True
         })
         self.config["cards"] = cards
@@ -229,7 +227,6 @@ class ConfigManager:
         return False
 
     def toggle_card(self, uid: str) -> Optional[bool]:
-        """Toggles active state of a card."""
         norm = normalize_uid(uid)
         for card in self.get_cards():
             if normalize_uid(card.get("uid", "")) == norm:
@@ -241,10 +238,10 @@ class ConfigManager:
     # --- Theme Methods ---
 
     def get_current_theme(self) -> Dict[str, str]:
-        theme_name = self.config.get("appearance", {}).get("theme_name", "Cyberpunk (Неон)")
+        theme_name = self.config.get("appearance", {}).get("theme_name", "Apple Dark (Тёмная macOS)")
         if theme_name in THEME_PRESETS:
             return THEME_PRESETS[theme_name]
-        return self.config.get("appearance", {}).get("custom_colors", THEME_PRESETS["Cyberpunk (Неон)"])
+        return THEME_PRESETS["Apple Dark (Тёмная macOS)"]
 
     def set_theme(self, theme_name: str):
         if theme_name in THEME_PRESETS:
@@ -252,17 +249,12 @@ class ConfigManager:
             self.config["appearance"]["custom_colors"] = THEME_PRESETS[theme_name].copy()
             self.save()
 
-    def update_custom_color(self, key: str, hex_color: str):
-        self.config["appearance"]["custom_colors"][key] = hex_color
-        self.config["appearance"]["theme_name"] = "Custom"
-        self.save()
-
     # --- Security Methods ---
 
     def verify_master_pin(self, pin: str) -> bool:
         stored_hash = self.config.get("security", {}).get("master_pin_hash", "")
         if not stored_hash:
-            return True  # No PIN set means access granted
+            return True
         return hash_pin(pin) == stored_hash
 
     def set_master_pin(self, pin: str):
@@ -270,20 +262,19 @@ class ConfigManager:
         self.save()
 
     def log_event(self, event_type: str, message: str, uid: str = ""):
-        """Appends an event to the local log file."""
         try:
             os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            line = f"[{timestamp}] [{event_type:<8}] {message}"
+            line = f"[{timestamp}] [{event_type:<10}] {message}"
             if uid:
-                line += f" (UID: {normalize_uid(uid)})"
+                line += f" · UID: {normalize_uid(uid)}"
             line += "\n"
             with open(LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(line)
         except Exception as e:
-            print(f"[Log] Error writing log: {e}")
+            print(f"[Log] Error: {e}")
 
-    def read_recent_logs(self, limit: int = 100) -> List[str]:
+    def read_recent_logs(self, limit: int = 150) -> List[str]:
         if not os.path.exists(LOG_FILE):
             return []
         try:

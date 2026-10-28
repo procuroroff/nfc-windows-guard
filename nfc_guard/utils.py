@@ -1,4 +1,4 @@
-"""System utilities: Autostart registration, Multi-monitor detection, and Daemon status.
+"""System utilities: Autostart registration, Multi-monitor detection, and Windows Auth.
 """
 
 import sys
@@ -10,11 +10,56 @@ from typing import Tuple, List, Dict
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
+advapi32 = ctypes.windll.advapi32
 
 AUTOSTART_KEY_NAME = "NFCWindowsGuard"
 REG_RUN_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+REG_POLICIES_SYSTEM = r"Software\Microsoft\Windows\CurrentVersion\Policies\System"
 DAEMON_MUTEX_NAME = "Global\\NFCWindowsGuardDaemonMutex"
 LOCK_MUTEX_NAME = "Global\\NFCWindowsGuardLockMutex"
+
+
+# --- Windows Authentication ---
+
+def verify_windows_password(password: str) -> bool:
+    """Verifies standard Windows account credentials via LogonUserW."""
+    if not password:
+        return False
+
+    username = os.environ.get("USERNAME", "")
+    domain = os.environ.get("USERDOMAIN", "")
+    h_token = wintypes.HANDLE()
+
+    LOGON32_LOGON_INTERACTIVE = 2
+    LOGON32_PROVIDER_DEFAULT = 0
+
+    try:
+        success = advapi32.LogonUserW(
+            username,
+            domain,
+            password,
+            LOGON32_LOGON_INTERACTIVE,
+            LOGON32_PROVIDER_DEFAULT,
+            ctypes.byref(h_token),
+        )
+        if success:
+            kernel32.CloseHandle(h_token)
+            return True
+        return False
+    except Exception as e:
+        print(f"[Auth] LogonUserW error: {e}")
+        return False
+
+
+def is_win_l_intercepted() -> bool:
+    """Checks if DisableLockWorkstation is enabled in registry."""
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_POLICIES_SYSTEM, 0, winreg.KEY_READ)
+        val, _ = winreg.QueryValueEx(key, "DisableLockWorkstation")
+        winreg.CloseKey(key)
+        return bool(val == 1)
+    except Exception:
+        return False
 
 
 # --- Multi-Monitor Geometry ---
@@ -63,7 +108,6 @@ def get_all_monitors() -> List[Dict[str, int]]:
     proc = MONITORENUMPROC(enum_proc)
     user32.EnumDisplayMonitors(None, None, proc, 0)
 
-    # Fallback if no monitor enumerated
     if not monitors:
         monitors.append({
             "left": 0,
@@ -77,14 +121,13 @@ def get_all_monitors() -> List[Dict[str, int]]:
 
 
 def is_light_color(hex_str: str) -> bool:
-    """Calculates perceived brightness of a hex color (returns True if bright)."""
+    """Calculates perceived brightness of a hex color."""
     try:
         clean = hex_str.lstrip("#")
         r = int(clean[0:2], 16)
         g = int(clean[2:4], 16)
         b = int(clean[4:6], 16)
-        luminance = (0.299 * r + 0.587 * g + 0.114 * b)
-        return luminance > 140
+        return (0.299 * r + 0.587 * g + 0.114 * b) > 140
     except Exception:
         return False
 
@@ -106,20 +149,16 @@ def get_startup_command() -> str:
 
 
 def is_autostart_enabled() -> bool:
-    """Checks if NFC Guard Daemon is registered in Windows Startup."""
     try:
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_PATH, 0, winreg.KEY_READ)
         val, _ = winreg.QueryValueEx(key, AUTOSTART_KEY_NAME)
         winreg.CloseKey(key)
         return bool(val)
-    except FileNotFoundError:
-        return False
     except Exception:
         return False
 
 
 def set_autostart(enabled: bool) -> Tuple[bool, str]:
-    """Registers or unregisters NFC Guard in Windows Startup registry."""
     try:
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER, REG_RUN_PATH, 0, winreg.KEY_SET_VALUE | winreg.KEY_READ
@@ -137,11 +176,10 @@ def set_autostart(enabled: bool) -> Tuple[bool, str]:
             winreg.CloseKey(key)
             return True, "Автозапуск отключен"
     except Exception as e:
-        return False, f"Ошибка настройки реестра: {e}"
+        return False, f"Ошибка реестра: {e}"
 
 
 def is_daemon_running() -> bool:
-    """Checks if background daemon mutex exists."""
     mutex = kernel32.OpenMutexW(0x00100000, False, DAEMON_MUTEX_NAME)
     if mutex:
         kernel32.CloseHandle(mutex)
@@ -150,7 +188,6 @@ def is_daemon_running() -> bool:
 
 
 def is_lock_active() -> bool:
-    """Checks if lock screen mutex exists."""
     mutex = kernel32.OpenMutexW(0x00100000, False, LOCK_MUTEX_NAME)
     if mutex:
         kernel32.CloseHandle(mutex)
@@ -159,10 +196,8 @@ def is_lock_active() -> bool:
 
 
 def shutdown_pc():
-    """Powers down the system."""
     os.system("shutdown /s /t 0")
 
 
 def restart_pc():
-    """Reboots the system."""
     os.system("shutdown /r /t 0")

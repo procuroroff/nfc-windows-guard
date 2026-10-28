@@ -18,6 +18,7 @@ from .utils import (
     DAEMON_MUTEX_NAME,
 )
 from .icons import create_tray_icon_pil
+from .hooks import HOOKPROC, KBDLLHOOKSTRUCT
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -49,28 +50,6 @@ user32.DefWindowProcW.argtypes = [
 user32.DefWindowProcW.restype = ctypes.c_longlong
 
 
-class KBDLLHOOKSTRUCT(ctypes.Structure):
-    _fields_ = [
-        ("vkCode", wintypes.DWORD),
-        ("scanCode", wintypes.DWORD),
-        ("flags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.c_ulonglong),
-    ]
-
-
-HOOKPROC = ctypes.WINFUNCTYPE(
-    ctypes.c_longlong, ctypes.c_int, wintypes.WPARAM, ctypes.POINTER(KBDLLHOOKSTRUCT)
-)
-user32.SetWindowsHookExW.argtypes = [
-    ctypes.c_int,
-    HOOKPROC,
-    wintypes.HINSTANCE,
-    wintypes.DWORD,
-]
-user32.SetWindowsHookExW.restype = wintypes.HHOOK
-
-
 class NFCGuardDaemon:
     """Background service guarding Win+L, lock/unlock events, and system tray."""
 
@@ -85,16 +64,18 @@ class NFCGuardDaemon:
         self._wnd_proc = None
         self._cls_name = "NFCGuardSessionWatcherCls"
         self._last_lock_time = 0
+        self.is_locked = False
 
     def start(self):
         self._mutex = kernel32.CreateMutexW(None, False, DAEMON_MUTEX_NAME)
-        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        if kernel32.GetLastError() == 183:
             print("[Daemon] Another daemon instance is already active.")
             sys.exit(0)
 
         self.running = True
         self.cfg.log_event("DAEMON_START", "Фоновая служба NFC Guard запущена")
 
+        # Initial lock on boot if configured
         if self.cfg.config.get("security", {}).get("lock_on_boot", True) and self.cfg.get_cards():
             self.spawn_lock_screen()
 
@@ -128,13 +109,15 @@ class NFCGuardDaemon:
         self.stop()
 
     def spawn_lock_screen(self):
-        if time.time() - self._last_lock_time < 2.0:
+        """Spawns the NFC lock screen overlay."""
+        if time.time() - self._last_lock_time < 1.5:
             return
         self._last_lock_time = time.time()
 
         if is_lock_active():
             return
 
+        self.is_locked = True
         main_py = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "main.py"))
         exe = get_pythonw_executable()
         subprocess.Popen([exe, main_py, "--lock"])
@@ -145,11 +128,14 @@ class NFCGuardDaemon:
         def wnd_proc(hwnd, msg, wparam, lparam):
             if msg == WM_WTSSESSION_CHANGE:
                 if wparam == WTS_SESSION_LOCK:
-                    self.cfg.log_event("SESSION_LOCK", "Обнаружена блокировка Windows (Win+L / таймаут)")
-                    self.spawn_lock_screen()
+                    # Native Windows lock event
+                    self.is_locked = True
+                    self.cfg.log_event("SESSION_LOCK", "Windows заблокирован")
                 elif wparam == WTS_SESSION_UNLOCK:
-                    self.cfg.log_event("SESSION_UNLOCK", "Сессия Windows разблокирована — запуск NFC Guard")
-                    self.spawn_lock_screen()
+                    # User authenticated successfully via standard Windows password
+                    # DO NOT prompt for card again!
+                    self.is_locked = False
+                    self.cfg.log_event("SESSION_UNLOCK", "Сессия успешно разблокирована штатным методом")
             elif msg == WM_HOTKEY:
                 if wparam == HOTKEY_LOCK_ID:
                     self.spawn_lock_screen()
@@ -196,6 +182,7 @@ class NFCGuardDaemon:
                         user32.GetAsyncKeyState(VK_RWIN) & 0x8000
                     )
                     if win_down:
+                        # User pressed Win+L
                         self.spawn_lock_screen()
             return user32.CallNextHookEx(self._hook, nCode, wParam, lParam)
 

@@ -1,18 +1,22 @@
 """Apple Human Interface Design Lock Screen for NFC Windows Guard.
-Displays minimalist, Apple-styled fullscreen lock screen with SF Pro typography across ALL displays.
+Dual unlock methods: NFC Keycard (ACR122U) or Standard Windows Password/PIN.
 """
 
-import time
 from datetime import datetime
 import tkinter as tk
-from tkinter import simpledialog
 import customtkinter as ctk
 from typing import Optional, Callable, List
 
 from .config import ConfigManager, normalize_uid
 from .reader import ACR122UReader
 from .hooks import KeyboardBlocker, set_task_manager_disabled, lock_workstation_now
-from .utils import shutdown_pc, restart_pc, get_all_monitors, is_light_color
+from .utils import (
+    shutdown_pc,
+    restart_pc,
+    get_all_monitors,
+    is_light_color,
+    verify_windows_password,
+)
 from .fonts import (
     init_apple_fonts,
     get_apple_font_family,
@@ -24,13 +28,13 @@ from .fonts import (
     font_caption,
     font_mono,
 )
-from .icons import create_nfc_glyph, create_lock_glyph, create_status_dot
+from .icons import create_nfc_glyph, create_status_dot
 
 
 class SecondaryLockOverlay(tk.Toplevel):
-    """Apple-styled lock screen overlay for secondary monitors."""
+    """Clean Apple-styled lock screen overlay for secondary displays."""
 
-    def __init__(self, master, monitor_info: dict, theme: dict, title_text: str):
+    def __init__(self, master, monitor_info: dict, theme: dict):
         super().__init__(master)
         self.master_ref = master
         self.theme = theme
@@ -43,13 +47,12 @@ class SecondaryLockOverlay(tk.Toplevel):
         self.geometry(f"{w}x{h}+{x}+{y}")
         self.configure(bg=theme["bg_color"])
 
-        # Top Clock
-        now = datetime.now()
+        # Clock centered at 18% height
         clock_frame = tk.Frame(self, bg=theme["bg_color"])
-        clock_frame.pack(side="top", pady=(h * 0.12, 0))
+        clock_frame.place(relx=0.5, rely=0.20, anchor="center")
 
+        now = datetime.now()
         date_str = now.strftime("%A, %d %B").capitalize()
-        # Russian day translation helper
         months_ru = {
             "January": "января", "February": "февраля", "March": "марта",
             "April": "апреля", "May": "мая", "June": "июня",
@@ -65,56 +68,56 @@ class SecondaryLockOverlay(tk.Toplevel):
         for en, ru in months_ru.items():
             date_str = date_str.replace(en, ru)
 
-        date_lbl = tk.Label(
+        self.sec_date_lbl = tk.Label(
             clock_frame,
             text=date_str,
             font=(get_apple_font_family(), 15),
             bg=theme["bg_color"],
             fg=theme["text_secondary"]
         )
-        date_lbl.pack()
+        self.sec_date_lbl.pack()
 
-        time_lbl = tk.Label(
+        self.sec_time_lbl = tk.Label(
             clock_frame,
             text=now.strftime("%H:%M"),
             font=(get_apple_font_family(), 64),
             bg=theme["bg_color"],
             fg=theme["text_primary"]
         )
-        time_lbl.pack(pady=(2, 0))
+        self.sec_time_lbl.pack(pady=(2, 0))
 
-        # Center Card
+        # Card centered at 55%
         card = tk.Frame(
             self,
             bg=theme["card_bg"],
             highlightbackground=theme["border_color"],
             highlightthickness=1,
-            padx=45,
-            pady=35
+            padx=40,
+            pady=32
         )
-        card.place(relx=0.5, rely=0.58, anchor="center")
+        card.place(relx=0.5, rely=0.55, anchor="center")
 
         padlock = tk.Label(
             card,
             text="🔒",
-            font=("Segoe UI", 36),
+            font=("Segoe UI", 32),
             bg=theme["card_bg"],
             fg=theme["accent_color"]
         )
-        padlock.pack(pady=(0, 10))
+        padlock.pack(pady=(0, 8))
 
         h_lbl = tk.Label(
             card,
             text="Система заблокирована",
-            font=(get_apple_font_family(), 17, "bold"),
+            font=(get_apple_font_family(), 16, "bold"),
             bg=theme["card_bg"],
             fg=theme["text_primary"]
         )
-        h_lbl.pack(pady=(0, 5))
+        h_lbl.pack(pady=(0, 4))
 
         p_lbl = tk.Label(
             card,
-            text="Приложите ключ-карту к считывателю на основном экране",
+            text="Приложите ключ-карту или введите пароль на основном экране",
             font=(get_apple_font_family(), 12),
             bg=theme["card_bg"],
             fg=theme["text_secondary"]
@@ -131,12 +134,11 @@ class SecondaryLockOverlay(tk.Toplevel):
 
 
 class NFCLockScreen(ctk.CTk):
-    """Apple-styled interactive Lock Screen on the Primary display."""
+    """Apple-styled interactive Lock Screen supporting both NFC and Password authentication."""
 
     def __init__(self, config_manager: Optional[ConfigManager] = None, on_unlock: Optional[Callable[[], None]] = None):
         super().__init__()
 
-        # Register SF Pro fonts
         init_apple_fonts()
 
         self.cfg = config_manager or ConfigManager()
@@ -144,7 +146,6 @@ class NFCLockScreen(ctk.CTk):
         self.on_unlock_callback = on_unlock
         self.theme = self.cfg.get_current_theme()
 
-        # Appearance mode
         if is_light_color(self.theme["bg_color"]):
             ctk.set_appearance_mode("light")
         else:
@@ -154,6 +155,7 @@ class NFCLockScreen(ctk.CTk):
         self.max_attempts = self.cfg.config.get("security", {}).get("max_attempts", 3)
         self.attempts_left = self.max_attempts
         self.is_unlocked = False
+        self.card_locked_out = False
 
         self.secondary_overlays: List[SecondaryLockOverlay] = []
 
@@ -169,15 +171,13 @@ class NFCLockScreen(ctk.CTk):
             on_status_change=self._on_reader_status_threadsafe,
         )
 
-        # Setup Windows & Multi-Monitor
         self._setup_multi_monitor_windows()
         self._build_ui()
 
-        # Start Reader loop & Clock ticker
         self.reader.start_listening()
         self._tick_clock()
 
-        self.bind("<Escape>", lambda e: self.prompt_master_pin())
+        self.bind("<Escape>", lambda e: self.fallback_to_windows_login())
 
     def _setup_multi_monitor_windows(self):
         self.overrideredirect(True)
@@ -191,13 +191,11 @@ class NFCLockScreen(ctk.CTk):
         self.geometry(f"{pw}x{ph}+{px}+{py}")
         self.configure(fg_color=self.theme["bg_color"])
 
-        title_text = self.cfg.config.get("appearance", {}).get("title_text", "Ключ-карта")
-
         for mon in all_monitors:
             if mon == primary_mon:
                 continue
             try:
-                overlay = SecondaryLockOverlay(self, mon, self.theme, title_text)
+                overlay = SecondaryLockOverlay(self, mon, self.theme)
                 self.secondary_overlays.append(overlay)
             except Exception as e:
                 print(f"[MultiMonitor] Overlay error: {e}")
@@ -206,7 +204,7 @@ class NFCLockScreen(ctk.CTk):
         self.grab_set()
 
     def _build_ui(self):
-        """Builds clean, Apple-inspired interface with generous spatial rhythm."""
+        """Constructs balanced, Apple-inspired layout with clean vertical spacing."""
         self.main_container = ctk.CTkFrame(
             self,
             fg_color=self.theme["bg_color"],
@@ -214,11 +212,11 @@ class NFCLockScreen(ctk.CTk):
         )
         self.main_container.pack(fill="both", expand=True)
 
-        # --- Top Header: Status Pill Badge ---
+        # --- Top Header: Status Pill & Native Fallback Link ---
         top_bar = ctk.CTkFrame(self.main_container, fg_color="transparent")
-        top_bar.pack(fill="x", padx=48, pady=(32, 0))
+        top_bar.pack(fill="x", padx=48, pady=(28, 0))
 
-        # Apple Capsule Status Pill
+        # Status Capsule
         self.status_pill = ctk.CTkFrame(
             top_bar,
             fg_color=self.theme["card_bg"],
@@ -238,166 +236,171 @@ class NFCLockScreen(ctk.CTk):
 
         self.status_text_lbl = ctk.CTkLabel(
             self.status_pill,
-            text="ACR122U: Поиск считывателя...",
+            text="ACR122U: Поиск...",
             font=font_caption(11),
             text_color=self.theme["text_secondary"]
         )
         self.status_text_lbl.pack(side="left", padx=(0, 14), pady=6)
 
-        # Fallback button (top right, minimal macOS button)
-        if self.cfg.config.get("security", {}).get("allow_manual_fallback", True):
-            self.fallback_btn = ctk.CTkButton(
-                top_bar,
-                text="Вход по паролю Windows",
-                font=font_body(12),
-                fg_color=self.theme["card_bg"],
-                border_width=1,
-                border_color=self.theme["border_color"],
-                text_color=self.theme["text_secondary"],
-                hover_color=self.theme.get("border_color", "#27272a"),
-                corner_radius=16,
-                command=self.fallback_to_windows_login,
-                height=32,
-                width=190
-            )
-            self.fallback_btn.pack(side="right")
+        # Native Windows Lock button (top right)
+        self.fallback_btn = ctk.CTkButton(
+            top_bar,
+            text="Штатный экран Windows ➔",
+            font=font_body(12),
+            fg_color=self.theme["card_bg"],
+            border_width=1,
+            border_color=self.theme["border_color"],
+            text_color=self.theme["text_secondary"],
+            hover_color=self.theme["border_color"],
+            corner_radius=14,
+            command=self.fallback_to_windows_login,
+            height=30,
+            width=190
+        )
+        self.fallback_btn.pack(side="right")
 
-        # --- Apple Clock & Date Section ---
-        clock_container = ctk.CTkFrame(self.main_container, fg_color="transparent")
-        clock_container.pack(pady=(20, 10))
+        # --- Apple Clock (Centered at ~18% height) ---
+        self.clock_container = ctk.CTkFrame(self.main_container, fg_color="transparent")
+        self.clock_container.place(relx=0.5, rely=0.18, anchor="center")
 
         self.date_lbl = ctk.CTkLabel(
-            clock_container,
-            text="Среда, 28 октября",
-            font=font_body(16),
+            self.clock_container,
+            text="",
+            font=font_body(15),
             text_color=self.theme["text_secondary"]
         )
         self.date_lbl.pack()
 
         self.clock_lbl = ctk.CTkLabel(
-            clock_container,
-            text="12:00",
+            self.clock_container,
+            text="",
             font=font_clock(68),
             text_color=self.theme["text_primary"]
         )
         self.clock_lbl.pack(pady=(2, 0))
 
-        # --- Center Apple Authentication Card ---
+        # --- Center Authentication Card (Centered at ~55% height) ---
         self.card_panel = ctk.CTkFrame(
             self.main_container,
             fg_color=self.theme["card_bg"],
             corner_radius=24,
             border_width=1,
             border_color=self.theme["border_color"],
-            width=440,
-            height=370,
+            width=460,
         )
-        self.card_panel.pack(pady=(15, 0))
-        self.card_panel.pack_propagate(False)
+        self.card_panel.place(relx=0.5, rely=0.55, anchor="center")
 
-        # Contactless Wave Icon
+        card_content = ctk.CTkFrame(self.card_panel, fg_color="transparent")
+        card_content.pack(padx=36, pady=30, fill="both")
+
+        # Contactless Icon Glyph
         self.icon_badge = ctk.CTkLabel(
-            self.card_panel,
+            card_content,
             text="",
             image=create_nfc_glyph(
-                size=76,
+                size=68,
                 color_hex=self.theme["accent_color"],
                 bg_hex=self.theme["bg_color"],
                 border_hex=self.theme["border_color"]
             )
         )
-        self.icon_badge.pack(pady=(30, 10))
+        self.icon_badge.pack(pady=(0, 10))
 
         # Title & Subtitle
-        title_text = self.cfg.config.get("appearance", {}).get("title_text", "Ключ-карта")
+        title_text = self.cfg.config.get("appearance", {}).get("title_text", "Вход в систему")
         self.title_lbl = ctk.CTkLabel(
-            self.card_panel,
+            card_content,
             text=title_text,
             font=font_title(19),
             text_color=self.theme["text_primary"]
         )
         self.title_lbl.pack()
 
-        sub_text = self.cfg.config.get("appearance", {}).get("subtitle_text", "Приложите карту к считывателю")
+        sub_text = self.cfg.config.get("appearance", {}).get("subtitle_text", "Приложите карту доступа или введите пароль")
         self.sub_lbl = ctk.CTkLabel(
-            self.card_panel,
+            card_content,
             text=sub_text,
             font=font_body(12),
             text_color=self.theme["text_secondary"]
         )
-        self.sub_lbl.pack(pady=(2, 14))
+        self.sub_lbl.pack(pady=(2, 12))
 
-        # Status Feedback Pill
+        # Dynamic Status / Feedback
         self.feedback_lbl = ctk.CTkLabel(
-            self.card_panel,
-            text="Ожидание NFC карты",
+            card_content,
+            text="Ожидание NFC-карты",
             font=font_headline(13),
             text_color=self.theme["accent_color"]
         )
         self.feedback_lbl.pack()
 
-        # Detected UID Pill
-        self.uid_lbl = ctk.CTkLabel(
-            self.card_panel,
-            text="",
-            font=font_mono(11),
-            text_color=self.theme["text_secondary"]
-        )
-        self.uid_lbl.pack(pady=(2, 8))
-
-        # Attempts Indicator: Apple macOS password pill dots
-        self.dots_container = ctk.CTkFrame(self.card_panel, fg_color="transparent")
-        self.dots_container.pack(pady=(4, 8))
+        # Attempts Indicator: 3 Apple capsule pills
+        self.dots_container = ctk.CTkFrame(card_content, fg_color="transparent")
+        self.dots_container.pack(pady=(6, 14))
 
         self.dot_widgets = []
         for i in range(self.max_attempts):
             dot = ctk.CTkFrame(
                 self.dots_container,
                 width=24,
-                height=6,
+                height=5,
                 corner_radius=3,
                 fg_color=self.theme.get("border_color", "#27272a")
             )
             dot.pack(side="left", padx=3)
             self.dot_widgets.append(dot)
 
-        self.attempts_lbl = ctk.CTkLabel(
-            self.card_panel,
-            text=f"Попыток: {self.attempts_left} из {self.max_attempts}",
-            font=font_caption(11),
-            text_color=self.theme["text_secondary"]
-        )
-        self.attempts_lbl.pack()
+        # Standard Password / PIN Input Row (Seamless Alternative Unlock)
+        pwd_row = ctk.CTkFrame(card_content, fg_color="transparent")
+        pwd_row.pack(fill="x", pady=(0, 6))
 
-        # Emergency Master PIN link
-        self.pin_link = ctk.CTkButton(
-            self.card_panel,
-            text="Мастер-PIN",
-            font=font_caption(11),
-            fg_color="transparent",
-            text_color=self.theme["text_secondary"],
-            hover_color=self.theme["bg_color"],
-            height=24,
-            width=90,
-            command=self.prompt_master_pin
+        self.pwd_entry = ctk.CTkEntry(
+            pwd_row,
+            placeholder_text="Пароль Windows или PIN",
+            font=font_body(13),
+            show="•",
+            fg_color=self.theme["bg_color"],
+            border_color=self.theme["border_color"],
+            corner_radius=12,
+            height=38,
+            width=290
         )
-        self.pin_link.pack(side="bottom", pady=12)
+        self.pwd_entry.pack(side="left", padx=(0, 8))
+        self.pwd_entry.bind("<Return>", lambda e: self.verify_password_entered())
+
+        self.submit_btn = ctk.CTkButton(
+            pwd_row,
+            text="➔",
+            font=font_headline(14),
+            fg_color=self.theme["accent_color"],
+            hover_color=self.theme["accent_hover"],
+            corner_radius=12,
+            height=38,
+            width=48,
+            command=self.verify_password_entered
+        )
+        self.submit_btn.pack(side="left")
+
+        # Focus password entry
+        self.pwd_entry.focus_set()
 
     def _tick_clock(self):
-        """Updates date and clock every second with Apple formatting."""
         if not self.winfo_exists() or self.is_unlocked:
             return
 
         now = datetime.now()
         self.clock_lbl.configure(text=now.strftime("%H:%M"))
 
-        # Localized Russian date
         months = ["января", "февраля", "марта", "апреля", "мая", "июня",
                   "июля", "августа", "сентября", "октября", "ноября", "декабря"]
         weekdays = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
-        day_name = weekdays[now.weekday()]
-        month_name = months[now.month - 1]
-        self.date_lbl.configure(text=f"{day_name}, {now.day} {month_name}")
+        self.date_lbl.configure(text=f"{weekdays[now.weekday()]}, {now.day} {months[now.month - 1]}")
+
+        for sec in self.secondary_overlays:
+            try:
+                sec.sec_time_lbl.configure(text=now.strftime("%H:%M"))
+            except Exception:
+                pass
 
         self.after(1000, self._tick_clock)
 
@@ -409,7 +412,7 @@ class NFCLockScreen(ctk.CTk):
     def _update_reader_status(self, connected: bool, name: str):
         if connected:
             self.status_dot_icon.configure(image=create_status_dot(8, self.theme["success_color"]))
-            clean_name = "ACR122U" if "ACR122" in name.upper() else name[:22]
+            clean_name = "ACR122U" if "ACR122" in name.upper() else name[:20]
             self.status_text_lbl.configure(
                 text=f"{clean_name} · Готов",
                 text_color=self.theme["text_primary"]
@@ -428,40 +431,36 @@ class NFCLockScreen(ctk.CTk):
         self.after(0, self._handle_card_removed)
 
     def _handle_card_detected(self, uid: str):
-        if self.is_unlocked:
+        if self.is_unlocked or self.card_locked_out:
             return
 
         norm_uid = normalize_uid(uid)
         is_auth = self.cfg.is_card_authorized(norm_uid)
         card_info = self.cfg.get_card_by_uid(norm_uid)
-        card_name = card_info.get("name", "Карта") if card_info else "Неизвестная карта"
-
-        if self.cfg.config.get("appearance", {}).get("show_uid_on_screen", True):
-            self.uid_lbl.configure(text=norm_uid)
+        card_name = card_info.get("name", "Ключ") if card_info else "Неизвестная карта"
 
         if is_auth:
-            self._access_granted(norm_uid, card_name)
+            self._access_granted_by_card(norm_uid, card_name)
         else:
-            self._access_denied(norm_uid)
+            self._access_denied_card(norm_uid)
 
     def _handle_card_removed(self):
-        if not self.is_unlocked and self.attempts_left > 0:
+        if not self.is_unlocked and not self.card_locked_out:
             self.feedback_lbl.configure(
-                text="Ожидание NFC карты",
+                text="Ожидание NFC-карты",
                 text_color=self.theme["accent_color"]
             )
 
-    def _access_granted(self, uid: str, name: str):
+    def _access_granted_by_card(self, uid: str, name: str):
         self.is_unlocked = True
-        self.cfg.log_event("SUCCESS", f"Доступ: {name}", uid)
+        self.cfg.log_event("SUCCESS", f"Разблокировка по NFC: {name}", uid)
 
         if self.cfg.config.get("security", {}).get("beep_on_success", True):
             self.reader.beep_success()
 
-        # Visual feedback: update glyph to Apple green
         self.icon_badge.configure(
             image=create_nfc_glyph(
-                size=76,
+                size=68,
                 color_hex=self.theme["success_color"],
                 bg_hex=self.theme["bg_color"],
                 border_hex=self.theme["success_color"]
@@ -472,19 +471,18 @@ class NFCLockScreen(ctk.CTk):
             text_color=self.theme["success_color"]
         )
 
-        self.after(550, self.unlock_and_close)
+        self.after(450, self.unlock_and_close)
 
-    def _access_denied(self, uid: str):
+    def _access_denied_card(self, uid: str):
         self.attempts_left -= 1
-        self.cfg.log_event("DENIED", f"Отказ. Попыток осталось {self.attempts_left}/{self.max_attempts}", uid)
+        self.cfg.log_event("DENIED", f"Неверная карта. Осталось {self.attempts_left}/{self.max_attempts}", uid)
 
         if self.cfg.config.get("security", {}).get("beep_on_error", True):
             self.reader.beep_error()
 
-        # Update glyph to error red
         self.icon_badge.configure(
             image=create_nfc_glyph(
-                size=76,
+                size=68,
                 color_hex=self.theme["error_color"],
                 bg_hex=self.theme["bg_color"],
                 border_hex=self.theme["error_color"]
@@ -495,65 +493,57 @@ class NFCLockScreen(ctk.CTk):
             text_color=self.theme["error_color"]
         )
 
-        # Update Apple pill dots: change failed ones to red
         failed_count = self.max_attempts - self.attempts_left
         for i, dot in enumerate(self.dot_widgets):
             if i < failed_count:
                 dot.configure(fg_color=self.theme["error_color"])
 
-        self.attempts_lbl.configure(
-            text=f"Попыток: {self.attempts_left} из {self.max_attempts}",
-            text_color=self.theme["error_color"]
-        )
-
         if self.attempts_left <= 0:
-            self._handle_attempts_exhausted()
+            self.card_locked_out = True
+            self.reader.beep_lockout()
+            self.feedback_lbl.configure(
+                text="Лимит попыток карты исчерпан. Введите пароль.",
+                text_color=self.theme["error_color"]
+            )
+            self.pwd_entry.focus_set()
 
-    def _handle_attempts_exhausted(self):
-        self.cfg.log_event("LOCKOUT", "Исчерпан лимит попыток. Переход к штатному входу Windows.")
-        self.reader.beep_lockout()
+    def verify_password_entered(self):
+        """Standard method authentication right from the lock screen."""
+        pwd = self.pwd_entry.get().strip()
+        if not pwd:
+            return
 
-        self.feedback_lbl.configure(
-            text="Лимит исчерпан. Переход к штатному входу...",
-            text_color=self.theme["error_color"]
-        )
+        # Check either Master PIN or real Windows password
+        is_pin_ok = self.cfg.verify_master_pin(pwd)
+        is_win_ok = verify_windows_password(pwd)
 
-        action = self.cfg.config.get("security", {}).get("action_on_fail", "lock_workstation")
-        self.after(900, lambda: self._execute_fail_action(action))
+        if is_pin_ok or is_win_ok:
+            method = "Мастер-PIN" if is_pin_ok else "Штатный пароль Windows"
+            self.is_unlocked = True
+            self.cfg.log_event("SUCCESS", f"Разблокировка: {method}")
 
-    def _execute_fail_action(self, action: str):
-        self._cleanup()
-        if action == "shutdown":
-            shutdown_pc()
-        elif action == "restart":
-            restart_pc()
+            self.feedback_lbl.configure(
+                text=f"✓ {method} подтвержден",
+                text_color=self.theme["success_color"]
+            )
+            self.pwd_entry.configure(border_color=self.theme["success_color"])
+            self.after(400, self.unlock_and_close)
         else:
-            lock_workstation_now()
-        self.destroy()
+            self.cfg.log_event("AUTH_FAIL", "Неверный ввод пароля/PIN")
+            self.feedback_lbl.configure(
+                text="✗ Неверный пароль или PIN",
+                text_color=self.theme["error_color"]
+            )
+            self.pwd_entry.configure(border_color=self.theme["error_color"])
+            self.pwd_entry.delete(0, "end")
+            self.pwd_entry.focus_set()
 
     def fallback_to_windows_login(self):
-        self.cfg.log_event("FALLBACK", "Штатный вход Windows")
+        """Immediately delegates to native Windows lock screen without looping."""
+        self.cfg.log_event("FALLBACK", "Переход к штатному экрану Windows")
         self._cleanup()
         lock_workstation_now()
         self.destroy()
-
-    def prompt_master_pin(self):
-        pin = simpledialog.askstring("Мастер-PIN", "Введите экстренный PIN-код или пароль:", parent=self, show="*")
-        if pin is not None:
-            if self.cfg.verify_master_pin(pin):
-                self.cfg.log_event("MASTER_PIN", "Разблокировка по мастер-PIN")
-                self.is_unlocked = True
-                self.feedback_lbl.configure(
-                    text="Мастер-PIN подтвержден",
-                    text_color=self.theme["success_color"]
-                )
-                self.after(400, self.unlock_and_close)
-            else:
-                self.cfg.log_event("MASTER_PIN_FAIL", "Неверный мастер-PIN")
-                self.feedback_lbl.configure(
-                    text="Неверный мастер-PIN",
-                    text_color=self.theme["error_color"]
-                )
 
     def unlock_and_close(self):
         self._cleanup()
